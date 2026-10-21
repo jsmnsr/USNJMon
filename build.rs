@@ -9,6 +9,7 @@ fn run(command: &mut Command) {
 
 fn main() {
     println!("cargo:rerun-if-changed=resources/messages.mc");
+    println!("cargo:rerun-if-changed=resources/provider.man");
     println!("cargo:rerun-if-env-changed=WINDOWS_SDK_BIN");
     if env::var("CARGO_CFG_TARGET_OS").unwrap() != "windows" {
         return;
@@ -25,23 +26,7 @@ fn main() {
             .unwrap_or_else(|| name.into())
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let source = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
-        .join("resources")
-        .join("messages.mc");
-    run(Command::new(tool("mc.exe"))
-        .arg("-U")
-        .arg("-h")
-        .arg(&out)
-        .arg("-r")
-        .arg(&out)
-        .arg(source));
-    let res = out.join("messages.res");
-    run(Command::new(tool("rc.exe"))
-        .current_dir(&out)
-        .arg("/nologo")
-        .arg("/fo")
-        .arg(&res)
-        .arg(out.join("messages.rc")));
+    let resources = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("resources");
     let sysroot = Command::new(env::var_os("RUSTC").unwrap())
         .args(["--print", "sysroot"])
         .output()
@@ -53,18 +38,54 @@ fn main() {
         .join(env::var("HOST").unwrap())
         .join("bin")
         .join("rust-lld.exe");
-    let dll = out.join("usn-eventlog-messages.dll");
-    run(Command::new(linker)
-        .args(["-flavor", "link", "/dll", "/noentry", "/machine:x64"])
-        .arg(format!("/out:{}", dll.display()))
-        .arg(res));
+    let profile = out.ancestors().nth(3).unwrap();
+    for (source, stem, directory, dll_name, variable) in [
+        (
+            "messages.mc",
+            "messages",
+            "legacy",
+            "usn-eventlog-messages.dll",
+            "USN_MESSAGE_DLL",
+        ),
+        (
+            "provider.man",
+            "provider",
+            "provider",
+            "usn-eventlog-provider.dll",
+            "USN_PROVIDER_DLL",
+        ),
+    ] {
+        let destination = out.join(directory);
+        fs::create_dir_all(&destination).unwrap();
+        run(Command::new(tool("mc.exe"))
+            .arg("-U")
+            .arg("-h")
+            .arg(&destination)
+            .arg("-r")
+            .arg(&destination)
+            .arg(resources.join(source)));
+        let res = destination.join(format!("{stem}.res"));
+        run(Command::new(tool("rc.exe"))
+            .current_dir(&destination)
+            .arg("/nologo")
+            .arg("/fo")
+            .arg(&res)
+            .arg(destination.join(format!("{stem}.rc"))));
+        let dll = destination.join(dll_name);
+        run(Command::new(&linker)
+            .args(["-flavor", "link", "/dll", "/noentry", "/machine:x64"])
+            .arg(format!("/out:{}", dll.display()))
+            .arg(res));
+        fs::copy(&dll, profile.join(dll_name)).unwrap();
+        println!("cargo:rustc-env={variable}={}", dll.display());
+    }
     fs::copy(
-        &dll,
-        out.ancestors()
-            .nth(3)
-            .unwrap()
-            .join("usn-eventlog-messages.dll"),
+        resources.join("provider.man"),
+        profile.join("usn-eventlog.man"),
     )
     .unwrap();
-    println!("cargo:rustc-env=USN_MESSAGE_DLL={}", dll.display());
+    println!(
+        "cargo:rustc-env=USN_PROVIDER_HEADER={}",
+        out.join("provider").join("provider.h").display()
+    );
 }

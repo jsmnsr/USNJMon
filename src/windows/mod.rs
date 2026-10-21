@@ -79,7 +79,7 @@ pub fn run(
     ready: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let _lock = lock_state(state_path)?;
-    let mut sink = eventlog::EventLog::open()?;
+    let mut sink = eventlog::EventLog::open(&stop)?;
     let result = collect(config_path, state_path, &stop, &mut sink, ready);
     if let Err(error) = &result {
         let event = Event::new(engine::FATAL, json!({"error": format!("{error:#}")}));
@@ -180,7 +180,10 @@ fn collect(
             break;
         }
     }
-    sink.write(&Event::new(engine::LIFECYCLE, json!({"state": "stopped"})))?;
+    sink.write(&Event::new(
+        engine::LIFECYCLE,
+        json!({"state": "stopped", "volume_count": workers.len()}),
+    ))?;
     Ok(())
 }
 

@@ -14,16 +14,18 @@ scoped approval.
    application does not create a journal. Configure only the test volume.
 2. Install with a sufficiently large custom log, verify private directory and
    custom-log ACLs, and run foreground. Confirm 101 starts at retained bounds,
-   100 events include the known older changes, 103 reaches the initial boundary,
-   and new changes have `historical: false`. Compare raw record timestamps with
+   category IDs 1000-1099 include the known older changes, 103 reaches the initial boundary,
+   and new changes have `Historical=false`. Compare raw record timestamps with
    ingestion time and inspect percent/Unicode filename rendering in Event Viewer.
 3. Stop mid-backfill, restart with unchanged state, and verify cursor resume.
    Exercise a process crash and deduplicate by `event_identity`; accepted-prefix
-   duplicates are expected. Verify malformed checkpoint files cause a visible
+   duplicates are expected (`EventIdentity` in schema 2). Verify malformed checkpoint files cause a visible
    fatal failure rather than implicit reset.
 4. Exercise log-full/write-denied and state-disk failure cases **only on the
    disposable machine**. Confirm no checkpoint advances beyond accepted writes,
-   failures stop the collector, and restart replays the uncommitted batch.
+   surfaced failures stop the collector, and restart replays the uncommitted batch.
+   ETW success does not guarantee destination persistence or synchronously
+   report every downstream log-full/loss condition; inspect actual EVTX output.
 5. Disconnect/reconnect an expendable configured volume; verify periodic 104,
    later resume or explicit 102, and continued collection of another volume.
    Wrap/recreation tests should use synthetic unit tests unless journal
@@ -31,8 +33,14 @@ scoped approval.
 6. Start with SCM, issue Stop and Shutdown controls during idle, backfill and
    read activity; verify stopped/failed status and safe resume. Driver/RPC stalls
    may lengthen stop time and must not cause early buffer freeing.
-7. Uninstall normally and verify retained events still render. Export first,
-   then test `-RemoveEventLog` and confirm unrelated logs/services are untouched.
+7. On a legacy installation, upgrade while stopped. Confirm legacy UsnJournal
+   history/registration/resources and checkpoint contents remain unchanged.
+   New records should resume into UsnEventLog/Operational with named fields,
+   multiline General descriptions, correct primary IDs and complete Reasons.
+   Exercise a field-name XPath query. Disable only the test native channel and
+   verify collection refuses to advance; restore its prior configuration.
+8. Uninstall normally and verify retained events still render. Export first,
+   then test `-RemoveEventLog` and confirm legacy/unrelated logs are untouched.
 
 Record OS/build, filesystem, toolchain, target and results without committing
 private filenames, machine events or credentials. Live SCM installation,

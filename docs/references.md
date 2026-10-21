@@ -21,7 +21,7 @@ Implementation was checked against these Microsoft references:
   use `GetOverlappedResult` for completed byte counts on overlapped handles,
   including calls that finish immediately. A non-invasive Windows test queries
   compression metadata on its own disposable file, not a journal or volume.
-- [ReportEventW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reporteventw):
+- [ReportEventW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reporteventw) (legacy):
   write failures, insertion size limits, literal string insertion formatting and
   Windows-generated event timestamps.
   The resource uses `%1!s!` (wide strings for `FormatMessageW`); in-memory
@@ -29,9 +29,19 @@ Implementation was checked against these Microsoft references:
 - [Event sources](https://learn.microsoft.com/en-us/windows/win32/eventlog/event-sources)
   and [reporting events](https://learn.microsoft.com/en-us/windows/win32/eventlog/reporting-an-event):
   custom source registration and message resources; avoid Application fallback.
-  Microsoft recommends modern manifest providers for new applications; this
-  implementation explicitly uses the supported classic API for synchronous
-  write errors and accepts its unnamed-field limitation.
+  Legacy log registrations/resources are retained for old event rendering.
+- [Instrumentation manifests](https://learn.microsoft.com/en-us/windows/win32/wes/writing-an-instrumentation-manifest)
+  and [event templates](https://learn.microsoft.com/en-us/windows/win32/wes/defining-event-data-templates):
+  modern provider identity, native named types and exact binary field order.
+- [Channels](https://learn.microsoft.com/en-us/windows/win32/wes/defining-channels):
+  a distinct operational channel, channel-specific descriptor keyword and ACL.
+- [EventWrite](https://learn.microsoft.com/en-us/windows/win32/api/evntprov/nf-evntprov-eventwrite):
+  events are ETW-accepted, not synchronously acknowledged as persisted EVTX.
+  Success also includes no enabled consumers, so enablement is checked
+  before/after emission and every nonzero write status fails collection.
+- [Channel properties](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtgetchannelconfigproperty):
+  explicit channel enablement check in addition to provider EventEnabled;
+  another ETW consumer alone must not mask a disabled destination channel.
 - [MoveFileExW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw):
   same-volume replacement and requested write-through; not a cross-system
   durable transaction with Event Log.

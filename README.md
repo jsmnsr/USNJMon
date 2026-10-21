@@ -2,25 +2,63 @@
 
 An independent **Rust Windows x64 service** that reads existing local NTFS USN
 journals, backfills their oldest readable retained records, then follows new
-changes. It writes structured telemetry to the **UsnJournal** custom classic
-Windows Event Log using source **UsnJournalBridge**. It does not depend on Sysmon
-or any other project and does not impersonate a Microsoft provider.
+changes. Version 0.2 writes native, named events through provider **UsnEventLog**
+to **UsnEventLog/Operational**. Event Viewer shows readable, multiline
+descriptions in **General** and typed fields in **Details**. No JSON parser is
+needed. It does not depend on Sysmon or impersonate a Microsoft provider.
 
-This is a first implementation, not a forensic recovery tool or a complete
-Sysmon replacement. USN records **do not identify the responsible process,
-PID, user, command line, or file contents**. No process/user attribution is
-inferred. The API calls only query/read journals; they never create, resize,
-delete, or change them. No VSS or raw-disk recovery is used.
+This is not a forensic recovery tool or a complete Sysmon replacement. USN
+records **do not identify the responsible process, PID, user, command line, or
+file contents**. No attribution is inferred. Journals are only queried/read:
+never created, resized, deleted or changed. No VSS or raw-disk recovery is used.
+
+## Events you can filter
+
+| ID | Primary change category |
+| --- | --- |
+| 1000 | File/directory created |
+| 1001 | File/directory deleted |
+| 1002 | Rename - old name |
+| 1003 | Rename - new name |
+| 1010 | Data changed |
+| 1020 | Security changed |
+| 1030 | Attributes/metadata changed |
+| 1099 | Other, including close-only/unknown reasons |
+
+One USN record produces **one event**, not one event per reason bit. Priority
+when reasons combine is **delete > rename-new > rename-old > create > security
+> data > metadata > other**. Every reason remains visible in `Reasons` and
+`ReasonFlags`, regardless of the primary category. These are journal-record
+categories, not reconstructed operations or guaranteed rename pairs.
+Health/coverage IDs 101-106 remain separate.
+
+An event's General tab looks like:
+
+```text
+File/directory deleted
+
+File name: example.txt
+Object: File
+Original time (UTC): ...
+Historical backfill: true
+Reasons: FILE_DELETE | CLOSE
+Raw reason flags: 0x80000200
+...
+```
+
+Details includes `FileName`, `OriginalTimestamp` (FILETIME), `Historical`
+(Boolean), `Reasons`, `ReasonFlags`, `Usn`, `JournalId`, file/parent references,
+attributes, record version and a stable `EventIdentity`. Original UTF-16 name
+units remain available in `FileNameUtf16Hex`; display control characters are
+escaped and labeled. [Full schema and query examples](docs/events.md).
 
 ## Build and non-invasive validation
 
-Supported targets: `x86_64-pc-windows-msvc` and `x86_64-pc-windows-gnu`, Windows
-10/11 or Server 2016+ x64. Install Rust **1.99.1** with rustfmt and the Windows
-10/11 SDK (`mc.exe`, `rc.exe`). MSVC additionally needs Visual Studio C++ Build
-Tools; GNU needs MinGW GNU binutils (including `dlltool` and its assembler) or
-LLVM's `llvm-dlltool` configured through `RUSTFLAGS=-C dlltool=...`. SDK tools
-are discovered by the build script wrapper; alternatively set `WINDOWS_SDK_BIN`
-to the SDK's `bin\<version>\x64` directory.
+Targets: `x86_64-pc-windows-msvc` and `x86_64-pc-windows-gnu`; Windows 10/11 or
+Server 2016+ x64. Install Rust **1.99.1** with rustfmt and the Windows 10/11 SDK
+(`mc.exe`, `rc.exe`). MSVC needs Visual Studio C++ Build Tools. GNU needs MinGW
+binutils including `dlltool` and its assembler, or LLVM's `llvm-dlltool`
+configured with an absolute `RUSTFLAGS=-C dlltool=...` path.
 
 ```powershell
 rustup toolchain install 1.99.1 --profile minimal --component rustfmt
@@ -30,56 +68,53 @@ rustup target add x86_64-pc-windows-msvc
 # Or: .\scripts\Build.ps1 -Target x86_64-pc-windows-gnu
 ```
 
-The lockfile pins dependencies. `Build.ps1` checks formatting, runs synthetic
-tests, builds release binaries, and uses `LoadLibraryExW`/`FormatMessageW` to
-verify all message IDs (including percent characters in payloads). It does
-**not** register a source, install/start a service, read any live journal, or
-write events. Both artifacts in `target\<target>\release` are needed:
-`usn-eventlog.exe` and the resource-only `usn-eventlog-messages.dll`. CI runs
-these same checks. No release is published automatically.
+The wrapper discovers the SDK; alternatively set `WINDOWS_SDK_BIN` to its
+`bin\<version>\x64` directory. Dependencies are locked. The wrapper checks
+formatting, tests, release builds and native resource formatting. CI runs both
+targets. Automated tests do not register providers, install/start services,
+read journals, or write Event Log records. A disposable file is used to check
+native I/O completion; other source records are synthetic.
 
-Tests cover V2/V3 synthetic record parsing, combined/unknown reasons, malformed
-bounds/alignment/versions, invalid UTF-16 preservation, retained bounds,
-restart, wrap/recreation/volume replacement, sink/checkpoint failures,
-at-least-once replay identity, cancellation, and message resource rendering.
-Mock control-handler tests do not prove real SCM or disk-driver behavior.
-Live service integration requires an explicitly approved disposable Windows
-test machine; see [validation](docs/validation.md).
+Distribute these files from `target\<target>\release` together:
 
-## Install, operate, uninstall
+- `usn-eventlog.exe`
+- `usn-eventlog-provider.dll` and `usn-eventlog.man` (native provider resources)
+- `usn-eventlog-messages.dll` (legacy rendering resources)
 
-Installation is an explicit **persistent host change**. Use an elevated
-**64-bit Windows PowerShell 5.1**, not PowerShell 7, for installation/removal.
-Review `config.example.json`, replace its volume selection, and save your
-configuration outside the repository. Each volume needs an existing active
-USN journal. Missing/inactive journals produce health warnings and retries,
-not journal creation.
+The manifest compiler validates the schema. Tests compare every wire field's
+name/type/order and event descriptor against the manifest/generated header,
+check combined-reason priorities, failure/replay behavior, Windows resource
+rendering, checkpoints, cancellation and journal parsing.
+
+## Install and operate
+
+Installation is a persistent host change. Use elevated **64-bit Windows
+PowerShell 5.1**, not PowerShell 7. Review `config.example.json`, select volumes
+with existing active journals, and save the configuration outside this repo.
 
 ```powershell
-# Does not start the service. -WhatIf previews registration/directory changes.
 .\scripts\Install.ps1 -BinaryDirectory .\target\x86_64-pc-windows-msvc\release `
     -ConfigPath C:\Admin\usn-config.json
+# Installer leaves the service STOPPED with Manual startup.
 Start-Service UsnEventLog
 Get-Service UsnEventLog
 Stop-Service UsnEventLog
-# Only after acceptance testing, if automatic startup is desired:
+# Optional, after acceptance testing:
 Set-Service UsnEventLog -StartupType Automatic
 ```
 
-The service is installed with **Manual** startup and LocalSystem because
-opening a volume for USN reads requires elevated volume access. It requests
-only `GENERIC_READ` and never enables backup/manage-volume privileges or
-broadens volume ACLs. This is not an unprivileged service. There is no network
-listener. Binaries reside in `%ProgramFiles%\UsnEventLog`; only Administrators
-and SYSTEM can modify them, while Users can read the message resource.
-Configuration and state under `%ProgramData%\UsnEventLog` are accessible only
-to SYSTEM and Administrators. The log ACL allows SYSTEM/Administrators full
-access and Event Log Readers read access. These ACLs apply only to this
-application's newly created directories and log.
+Use `-WhatIf` to preview persistent installation changes. The service uses
+LocalSystem because opening a volume requires elevated access, but requests
+only `GENERIC_READ`; it never enables backup/manage-volume privileges or
+broadens volume ACLs. There is no network listener.
 
-Foreground collection writes the **same real Event Log** and needs the
-installed registration and message DLL. Stop the service first; a shared
-state-directory lock prevents concurrent writers:
+Only Administrators and SYSTEM can modify `%ProgramFiles%\UsnEventLog`;
+Users can read its message resources. Configuration/checkpoints under
+`%ProgramData%\UsnEventLog` are private to Administrators and SYSTEM.
+The new channel grants SYSTEM/Administrators full access and Event Log Readers
+read access. These ACLs affect only this application's directories/channel.
+
+Foreground mode writes the same real native log. Stop the service first:
 
 ```powershell
 & "$env:ProgramFiles\UsnEventLog\usn-eventlog.exe" foreground `
@@ -87,139 +122,121 @@ state-directory lock prevents concurrent writers:
 # Ctrl+C requests cancellation.
 ```
 
-Use `check-config <path>` and `verify-resources <dll>` for non-invasive checks.
-The collector refuses an absent/mismatched registration instead of silently
-falling back to the Application log. Never place executable/config/state paths
-in locations writable by untrusted users. Custom foreground state directories
-must be provisioned with equivalent ACLs by an administrator.
+A state-directory lock excludes concurrent collectors/upgrades. Custom state
+directories must have equivalent private ACLs. `check-config <config.json>`
+and `verify-resources <usn-eventlog-provider.dll>` are non-invasive.
 
-For an upgrade: stop the service, back up configuration/checkpoints, replace
-both installed artifacts as Administrator, run `verify-resources`, and start
-explicitly. Do not change configured volume `name` values unless intentionally
-starting fresh history for those entries.
+## Upgrade from the JSON-only version
+
+Stop all service/foreground collection, close Event Viewer if it has resources
+open, then:
+
+```powershell
+.\scripts\Install.ps1 -Upgrade `
+    -BinaryDirectory .\target\x86_64-pc-windows-msvc\release
+```
+
+Upgrade preserves configuration, checkpoints, service startup mode and the
+legacy **UsnJournal / UsnJournalBridge** log/source/message DLL. It leaves the
+service stopped and backs up replaced artifacts as `.previous`. Collection
+continues from the existing checkpoint into **UsnEventLog/Operational**; it
+does not replay already-accepted legacy records just to reformat them.
+Legacy JSON events remain readable in their original log and format.
+For complete history across the upgrade, retain/query **both** logs.
+Subsequent native-provider upgrades preserve the channel's enabled state,
+retention mode, ACL and size; passing `-MaximumSizeMB` explicitly changes its size.
+
+If registration/copying fails, leave collection stopped, inspect the explicit
+error and `.previous` backups, and retry or restore the previous executable
+and resources. Installation is not a transaction across files and registration;
+it never silently rolls back checkpoints or deletes history.
+
+## Uninstall
 
 ```powershell
 .\scripts\Uninstall.ps1
-# Optional, DESTRUCTIVE: deletes the custom log and its source, not other logs.
+# Optional, destructive: clear the native log and unregister its provider.
 .\scripts\Uninstall.ps1 -RemoveEventLog
 ```
 
-Default uninstall stops/removes only the service. It retains the log, source,
-message DLL, binaries, config and checkpoints to preserve old event rendering
-and evidence. Export/archive the log before `-RemoveEventLog` if needed.
-Directory/file removal is deliberately manual and limited to the two exact
-application directories after service deletion. A fresh reinstall requires
-those directories and this application's source/log to be absent. Deleting
-checkpoints causes another retained-history backfill (and duplicates), not
-recovery of expired history. The installer refuses existing artifacts rather
-than taking ownership of unknown directories; a partial installation must be
-inspected and cleaned up explicitly before retrying.
+By default only the service is stopped/removed. The native channel/provider,
+resources, binaries, config and checkpoints remain so recorded events render.
+Export first before `-RemoveEventLog`. **Legacy UsnJournal is never removed**
+by these scripts. Application directory/file removal is deliberately manual
+after service deletion. Removing checkpoints starts another retained-history
+backfill, not recovery of expired history.
 
 ## Collection and durability
 
-Each configured volume has a stable administrator-chosen `name` and a local
-mount-point root (for example `C:\`) or volume GUID root with trailing `\`.
-Use one entry per physical volume; do not configure multiple aliases for the
-same volume. A renamed/reassigned mount point does not define identity: the
-checkpoint contains the resolved **volume GUID + volume serial + journal ID**.
-Clones that duplicate all identities are outside this identity guarantee.
-Configuration is read only on startup; unknown keys and invalid values fail.
+Each volume has a stable administrator-chosen `name` plus a local mount-point
+root (`C:\`) or volume GUID root with trailing `\`. Use one entry per volume,
+not multiple aliases. Checkpoints bind the resolved **volume GUID + serial +
+journal ID**, not a drive letter alone. Clones duplicating all identities are
+outside this guarantee. Configuration is validated at startup.
 
-First use starts at `max(FirstUsn, LowestValidUsn)`, not the current tail.
-Subsequent starts use the saved next USN. The queried `NextUsn` at startup or
-reconnect is a fixed historical/live boundary, persisted in the checkpoint.
-Records below it are marked `historical: true`; later records are live relative
-to that boundary, not necessarily recent by wall clock. Event 101 records
-coverage; event 103 marks reaching that boundary. The record's original
-FILETIME is payload data; Windows supplies **ingestion time** in event metadata.
-No backdating occurs.
+First use begins at `max(FirstUsn, LowestValidUsn)`, never the tail. Restarts
+resume the saved next USN. The queried startup/reconnect `NextUsn` establishes
+the historical/live boundary: earlier records have `Historical=true`. Event
+101 describes coverage; 103 marks reaching that boundary. Windows event
+metadata uses ingestion time; `OriginalTimestamp` preserves the source time.
 
-Query/read buffers are bounded at 64 KiB; each volume gets one batch per
-round, with cancellation checks between records and interruptible delays.
-`event_interval_ms` (default 2, minimum 1) caps record emission at roughly 500
-events/second globally before other overhead. `poll_interval_ms` defaults to
-200; failed volumes retry every `retry_interval_ms` (default 10000). Slow
-backfill can lose ground to journal wrap. There is no unbounded queue or
-silently dropped overflow. Configure fewer volumes or adjust the documented
-rates based on source churn and log capacity.
+Memory is bounded by 64 KiB read buffers and one batch per volume per round.
+`event_interval_ms` defaults to 2 (minimum 1), `poll_interval_ms` to 200, and
+`retry_interval_ms` to 10000. OS scheduling, native channel checks and disk
+overhead can make throughput substantially slower than the theoretical
+500-record/second limit. Slow backfill may lose ground to journal wrap.
+There is no unbounded queue or dropped-overflow fallback.
 
-Only successful `ReportEventW` calls permit checkpoint advancement. A batch
-is committed after all its writes succeed. Checkpoints use a flushed same-
-directory temporary file and atomic replacement with write-through requested.
-On a crash, cancellation mid-batch, or checkpoint failure, an accepted batch
-prefix can replay. Stable `event_identity` values support deduplication.
-**This is at-least-once replay behavior, not exactly-once delivery or a
-power-loss-proof evidence store.** Event Log API acceptance does not guarantee
-physical storage durability; hardware, OS buffering, corruption, administrative
-clearing and retention can still lose data. There is no distributed transaction
-between a checkpoint and the Windows Event Log.
+Checkpoints advance only after all event writes in a batch return success,
+using a flushed temporary file and atomic replacement with write-through
+requested. Cancellation, crashes or persistence failures can replay an
+accepted prefix; `EventIdentity` supports deduplication across both formats.
+There is **no exactly-once or power-loss-proof storage guarantee**.
 
-Wrap, journal restamping/recreation, volume replacement and an invalid cursor
-produce gap event 102 **before** resetting to the oldest available bound.
-The number of missing records is unknown; USN offsets are not counts.
-Disappearing volumes and query/read/parser failures emit event 104 and retain
-their checkpoint while other volumes continue. Unsupported major versions
-(including V4 range records) fail closed at the affected batch, with health
-warnings; they are not interpreted as V2/V3 or silently skipped. Persistent
-failures need operator attention. Event Log/checkpoint failures stop the whole
-collector with a nonzero service exit code, attempting event 105 and writing
-stderr in foreground. If Event Log itself is unavailable, a health event
-cannot be guaranteed; inspect SCM status and foreground diagnostics.
+The native sink uses **ETW EventWrite**, not the legacy ReportEvent API.
+ETW can report success when no consumer is enabled, so the collector validates
+registration and checks both channel enablement and `EventEnabled` before/after
+each write, treating disabled channels and nonzero write results as failures.
+**Success is ETW acceptance, not acknowledgement that an event reached durable
+EVTX storage.** Channel reconfiguration races, downstream Event Log failures,
+buffering and retention cannot be made transactional with checkpoints.
+Native Event Log full/disabled/failure behavior needs deployment acceptance
+testing; do not assume every downstream loss is returned synchronously.
+Forward/export important telemetry and monitor the destination independently.
 
-## Coverage and limits
+Wrap, journal replacement/restamping, volume changes and invalid cursors emit
+102 before rebasing. Missing-record counts are unknown. Source read/parse
+errors, missing journals and disconnected volumes emit 104 and retry without
+advancing their cursors. V4/range records fail closed, not silently filtered.
+Sink/checkpoint failures stop collection, attempt 105 and report stderr/
+nonzero SCM status. If the destination is unavailable, a health event itself
+cannot be guaranteed.
 
-Only already-retained journal records can be read. Wrapped/deleted records,
-changes before journal creation, and activity while journaling was disabled
-cannot be reconstructed. A USN journal is an aggregate change record, not a
-complete ordered stream of every write. Reason bits can combine and repeat
-at close. Rename old/new records are emitted independently without invented
-pairing. Filename and parent ID are historical record data; **full paths are
-not resolved** (`path_status: "unresolved"`). Deleted files, hard links and
-renamed parents make retrospective paths unreliable.
+## Coverage and operational limits
 
-Local NTFS only: no ReFS/SMB/CSV, remote volumes, 32-bit or ARM builds. V2/V3
-records are parsed; minor-version extensions use on-record offsets. There is
-no claim of support for V4 extent/range records. Maximum NTFS filename size
-is enforced, original UTF-16 units are preserved, and lossy display conversion
-is labeled. SecurityId is file security-descriptor metadata, **not an actor**.
-System event process/thread metadata, if exposed, refers to the collector.
+Only retained NTFS history exists to read. Wrapped/deleted records and activity
+before journal creation or while journaling was disabled cannot be recovered.
+USN reasons aggregate changes and may repeat at close. No full historical path
+is guessed: `PathStatus=unresolved`, `FullPath` empty. File/parent references and
+names are record data. `SecurityId` is file metadata, **not an actor**; system
+PID/thread fields, when present, identify the collector.
 
-SCM Stop/Shutdown and console Ctrl+C cancel delays and outstanding overlapped
-volume I/O; buffers remain alive until cancelled I/O completes. Unresponsive
-drivers, synchronous Event Log RPC calls and disk flushes can delay shutdown;
-there is no false hard shutdown deadline or forced unsafe buffer release.
-Real SCM/driver integration has to be validated on the deployment environment.
+Local NTFS V2/V3 only; no ReFS, SMB, CSV, ARM or 32-bit support. Minor extensions
+use record offsets. Unsupported records/malformed lengths stop that batch.
+Original UTF-16 units survive lossy display conversion.
 
-The collector can observe **its own checkpoint and Event Log writes** if those
-files reside on monitored volumes. This can sustain extra journal traffic;
-no records are silently filtered to hide that feedback. For high-volume
-deployments, place the custom log/state on a separate non-monitored storage
-volume through an explicitly reviewed deployment configuration, or account
-for the feedback and rate cap. The provided installer uses standard fixed
-Windows locations and does not relocate system logs.
+SCM Stop/Shutdown and Ctrl+C cancel delays and pending overlapped I/O, retaining
+buffers until completion. Stalled drivers, Event Log calls and disk flushes can
+delay shutdown; there is no hard forced deadline.
 
-## Event Log capacity and querying
+Monitoring the volumes that hold this application's logs/checkpoints can
+generate **self-traffic**. Nothing is silently filtered to conceal it. For busy
+deployments, explicitly review placement on non-monitored storage and rate
+limits; the installer uses standard fixed Windows locations.
 
-The installer configures only `UsnJournal`: default **256 MiB**, overwrite-
-as-needed, configurable with `-MaximumSizeMB`. A long backfill can overwrite
-its own oldest events before finishing. Size the log for measured expanded
-event size, forward events to durable storage, or export and archive frequently.
-No settings for Application, System, Security or any other log are changed.
-If you manually select a non-overwriting policy and the log fills, collection
-stops on write failure; it does not drop records to keep going. Checkpoints
-do not detect a manually cleared/overwritten destination log.
-
-Event Viewer: **Applications and Services Logs > UsnJournal**. Filter natively
-by source, Event ID, level and ingestion time. The classic API was deliberately
-chosen for synchronous write-error reporting. It has one JSON insertion string
-(`Properties[0]` / unnamed XML `EventData/Data`), **not manifest-named XML fields**.
-Parse that JSON for field-level queries; this is not an ETW analytic channel.
-
-```powershell
-Get-WinEvent -FilterHashtable @{LogName='UsnJournal'; Id=100} -MaxEvents 100 |
-    ForEach-Object { $_.Properties[0].Value | ConvertFrom-Json } |
-    Where-Object { $_.record.reason_names -contains 'FILE_DELETE' } |
-    Select-Object event_identity, historical, @{n='Name';e={$_.record.filename}}
-```
-
-See [event schema](docs/events.md) and [Microsoft API references](docs/references.md).
+The new channel defaults to **256 MiB**, overwrite-as-needed. A large backfill
+can overwrite its own earliest events. Size it for expanded events and
+forward/export promptly. The installer changes no unrelated log policies;
+the old UsnJournal log is untouched. Checkpoints cannot detect a manually
+cleared/overwritten destination. See [acceptance testing](docs/validation.md)
+and [native API references](docs/references.md).

@@ -8,7 +8,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-pub const RECORD: u32 = 100;
 pub const COVERAGE: u32 = 101;
 pub const GAP: u32 = 102;
 pub const CAUGHT_UP: u32 = 103;
@@ -133,7 +132,7 @@ pub fn deliver(
         if stop.requested() {
             return Ok(());
         }
-        sink.write(&Event::new(RECORD, json!({
+        sink.write(&Event::new(crate::schema::category(record.reason).0, json!({
             "event_identity": format!("{}:{:016x}:{}", checkpoint.volume_identity, checkpoint.journal_id, record.usn),
             "volume_identity": checkpoint.volume_identity,
             "journal_id": checkpoint.journal_id,

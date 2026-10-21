@@ -22,7 +22,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
     & cargo build --locked --target $Target --release
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
-    & ".\target\$Target\release\usn-eventlog.exe" verify-resources ".\target\$Target\release\usn-eventlog-messages.dll"
+    & ".\target\$Target\release\usn-eventlog.exe" verify-resources ".\target\$Target\release\usn-eventlog-provider.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Message formatting failed' }
-    Write-Output "Artifacts: target\$Target\release\usn-eventlog.exe and usn-eventlog-messages.dll"
+    Write-Output "Artifacts: target\$Target\release\usn-eventlog.exe, usn-eventlog-provider.dll, usn-eventlog.man and legacy usn-eventlog-messages.dll"
 } finally { Pop-Location }

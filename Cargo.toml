@@ -1,6 +1,6 @@
 [package]
 name = "usn-eventlog"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Read-only NTFS USN journal to Windows Event Log service"
@@ -19,12 +19,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_Etw",
     "Win32_System_EventLog",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
     "Win32_System_Threading",
 ] }
+
+[dev-dependencies]
+roxmltree = "0.21"
 
 [profile.release]
 lto = true
