@@ -1,8 +1,8 @@
 # USN Event Log Bridge
 
 An independent **Rust Windows x64 service** that reads existing local NTFS USN
-journals, backfills their oldest readable retained records, then follows new
-changes. Version 0.2 writes native, named events through provider **UsnEventLog**
+journals and collects **live changes while independently backfilling retained
+history**. Version 0.3 writes native, named events through provider **UsnEventLog**
 to **UsnEventLog/Operational**. Event Viewer shows readable, multiline
 descriptions in **General** and typed fields in **Details**. No JSON parser is
 needed. It does not depend on Sysmon or impersonate a Microsoft provider.
@@ -145,6 +145,9 @@ Legacy JSON events remain readable in their original log and format.
 For complete history across the upgrade, retain/query **both** logs.
 Subsequent native-provider upgrades preserve the channel's enabled state,
 retention mode, ACL and size; passing `-MaximumSizeMB` explicitly changes its size.
+Version 0.3 keeps existing checkpoints as the historical cursors and creates
+separate `state\live\<volume-name>.json` cursors automatically. No manual
+checkpoint editing or temporary demo collector is needed.
 
 If registration/copying fails, leave collection stopped, inspect the explicit
 error and `.previous` backups, and retry or restore the previous executable
@@ -174,18 +177,49 @@ not multiple aliases. Checkpoints bind the resolved **volume GUID + serial +
 journal ID**, not a drive letter alone. Clones duplicating all identities are
 outside this guarantee. Configuration is validated at startup.
 
-First use begins at `max(FirstUsn, LowestValidUsn)`, never the tail. Restarts
-resume the saved next USN. The queried startup/reconnect `NextUsn` establishes
-the historical/live boundary: earlier records have `Historical=true`. Event
-101 describes coverage; 103 marks reaching that boundary. Windows event
-metadata uses ingestion time; `OriginalTimestamp` preserves the source time.
+Each volume has two independent worker threads and durable cursors. On first
+use the live worker saves the queried `NextUsn` as its starting cursor and a
+fixed split boundary. The historical worker starts at
+`max(FirstUsn, LowestValidUsn)`, or resumes the existing legacy checkpoint,
+and stops at that exclusive boundary. It never emits records belonging to the
+live range. Thus the first retained history is **not skipped**, but it cannot
+hold new file changes behind a large backfill.
 
-Memory is bounded by 64 KiB read buffers and one batch per volume per round.
+Both cursors resume after restart; the split is preserved for the same journal.
+The live worker also collects retained changes missed while the service was
+stopped. Journal replacement establishes a new split and explicit gap notices;
+same-journal wrap preserves the split and reports lost coverage. A history
+worker whose remaining range has wrapped reports a gap rather than replaying
+the live range. Source errors retry per lane; sink/state failures cancel all
+workers. Stop/Shutdown cancels and joins every worker.
+
+`Historical=true` identifies records before the fixed split; `false` identifies
+the live range, including any downtime backlog. Event 101 identifies
+`live_start`/`live_resume` and historical coverage; 103 marks completion of the
+historical range. Ingestion order interleaves old and new records. Windows
+event metadata uses ingestion time; `OriginalTimestamp` preserves source time.
+
+Memory is bounded by one 64 KiB read buffer/batch per lane per volume.
 `event_interval_ms` defaults to 2 (minimum 1), `poll_interval_ms` to 200, and
-`retry_interval_ms` to 10000. OS scheduling, native channel checks and disk
+`retry_interval_ms` to 10000. These limits apply independently to each lane.
+OS scheduling, native channel checks and disk
 overhead can make throughput substantially slower than the theoretical
-500-record/second limit. Slow backfill may lose ground to journal wrap.
+500-record/second per-lane limit. Slow backfill may lose ground to journal wrap.
+Live events normally arrive within seconds, but heavy sustained activity,
+a large downtime backlog, or stalled Windows I/O can still delay them.
 There is no unbounded queue or dropped-overflow fallback.
+
+For your own file changes, use the **Operational channel**, not an exported
+`.evtx` snapshot. Press **Refresh / F5** in Event Viewer to update its event list.
+To hide historical backfill in a custom XML query, use:
+
+```xml
+<QueryList>
+  <Query Id="0" Path="UsnEventLog/Operational">
+    <Select Path="UsnEventLog/Operational">*[EventData[Data[@Name='Historical']='false']]</Select>
+  </Query>
+</QueryList>
+```
 
 Checkpoints advance only after all event writes in a batch return success,
 using a flushed temporary file and atomic replacement with write-through

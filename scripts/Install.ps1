@@ -102,6 +102,10 @@ if ($PSCmdlet.ShouldProcess('UsnEventLog', 'Install/update native provider and s
                 if ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint) {
                     throw "Refusing reparse-point artifact: $destination"
                 }
+                $source = Join-Path $BinaryDirectory $name
+                if ((Get-FileHash -LiteralPath $source).Hash -eq (Get-FileHash -LiteralPath $destination).Hash) {
+                    continue
+                }
                 Copy-Item -LiteralPath $destination -Destination "$destination.previous" -Force
             }
             Copy-Item -LiteralPath (Join-Path $BinaryDirectory $name) -Destination $destination -Force

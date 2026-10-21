@@ -41,6 +41,12 @@ scoped approval.
    verify collection refuses to advance; restore its prior configuration.
 8. Uninstall normally and verify retained events still render. Export first,
    then test `-RemoveEventLog` and confirm legacy/unrelated logs are untouched.
+9. With a large historical backlog, start version 0.3 and create/modify/rename/
+   delete owned fixture files after the `live_start` notice. Verify their
+   `Historical=false` events arrive within a measured few-second budget while
+   historical events and their cursor keep advancing. Check both state files,
+   graceful SCM restart/resume, and disjoint ranges at the persisted split.
+   Do not reset the existing historical cursor to demonstrate live behavior.
 
 Record OS/build, filesystem, toolchain, target and results without committing
 private filenames, machine events or credentials. Live SCM installation,

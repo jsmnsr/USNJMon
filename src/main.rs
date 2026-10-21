@@ -11,7 +11,7 @@ fn main_result() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.is_empty() || args[0] == "--help" {
         println!(
-            "usn-eventlog 0.2.0\n\
+            "usn-eventlog 0.3.0\n\
             Usage:\n  usn-eventlog foreground <config.json> <state-directory>\n  \
             usn-eventlog service <config.json> <state-directory>\n  \
             usn-eventlog verify-resources <message.dll>\n  usn-eventlog check-config <config.json>\n\

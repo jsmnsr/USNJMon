@@ -20,7 +20,7 @@ Keep provider registration/resources available for archived-event rendering.
 | 1099 | Information | Other, including close-only/unknown reasons |
 | 101 | Information | First retained coverage or restart/reconnect boundary |
 | 102 | Warning | Continuity gap / identity change / invalid cursor and rebase |
-| 103 | Information | Startup/reconnect backfill boundary reached |
+| 103 | Information | Historical range completed |
 | 104 | Warning | Source read/parse failure, including unsupported records; retry |
 | 105 | Error | Fatal collector failure (best effort if destination failed) |
 | 106 | Information | Collector started/stopped |
@@ -41,7 +41,7 @@ Rename records are not paired/invented. Unknown bits are never discarded.
 | `FileName` | UnicodeString, display name; control characters escaped |
 | `ObjectType` | UnicodeString, File or Directory from raw attributes |
 | `OriginalTimestamp` | FILETIME, original UTC source timestamp (100 ns ticks since 1601) |
-| `Historical` | Boolean, USN below fixed startup/reconnect backfill boundary |
+| `Historical` | Boolean, USN below the durable live/history split |
 | `Reasons` | UnicodeString, recognized reason names separated by ` \| ` |
 | `ReasonFlags`, `UnknownReasonBits` | UInt32, rendered in hex; all reasons / unrecognized bits |
 | `Usn` | Int64, source cursor; not the destination EventRecordID |
@@ -52,7 +52,7 @@ Rename records are not paired/invented. Unknown bits are never discarded.
 | `SecurityId` | UInt32, file security metadata ID, not a user SID |
 | `MajorVersion`, `MinorVersion` | UInt16, source record layout version |
 | `RecordLength` | UInt32, original aligned record byte length |
-| `BackfillEnd` | Int64, exclusive startup/reconnect boundary |
+| `BackfillEnd` | Int64, exclusive historical boundary / start of live range |
 | `PathStatus`, `FullPath` | UnicodeString, `unresolved` / empty in this version |
 | `FileNameUtf16Hex` | UnicodeString, space-separated four-digit original UTF-16 units |
 | `FileNameLossy` | Boolean, display Unicode needed replacement characters |
@@ -76,7 +76,10 @@ requiring a `0x` prefix.
 
 Gap kinds: `volume_replaced`, `journal_recreated_or_restamped`,
 `retained_history_wrapped`, `cursor_ahead_of_journal`,
-`read_cursor_invalidated`. Other coverage kinds: `first_use`, `resume`.
+`read_cursor_invalidated`. Other coverage kinds: `first_use`, `resume`,
+`live_start`, `live_resume`, `history_complete`. `Coverage` distinguishes
+`retained_history_before_live_split` from `live_from_split_boundary`.
+Independent lanes can each report a gap for the same journal disruption.
 Missing counts are `"unknown"`: USN offsets are not record counts. Absent
 previous checkpoint fields are empty/zero **only when the presence flag is
 false**, not real zero identities.
@@ -92,14 +95,19 @@ prove lost history; a subsequent 102 reports a detected gap.
 106: `SchemaVersion`, `State` (`started`/`stopped`), `VolumeCount`.
 
 Health events can repeat on retry/replay and have no record deduplication
-identity. A replay may have a different historical boundary, but the same
-record retains its `EventIdentity`.
+identity. Health `VolumeName` includes `(live)` or `(history)` to identify the
+affected lane. The split stays fixed for the same journal across restarts.
+The same source record retains its `EventIdentity`; duplicates can still occur
+after interrupted batches or manual checkpoint resets.
 
 ## Event Viewer / PowerShell queries
 
 Event Viewer: **Applications and Services Logs > UsnEventLog > Operational**.
 Filter by ID in the normal filter UI. The Details XML contains fields such as
 `<Data Name="FileName">example.txt</Data>`, not a JSON insertion.
+The live and historical lanes interleave in this channel. Filter
+`Data[@Name='Historical']='false'` for the live range and refresh Event Viewer
+to see newly arrived records. An exported `.evtx` file is a static snapshot.
 
 ```powershell
 Get-WinEvent -FilterHashtable @{LogName='UsnEventLog/Operational'; Id=1001} -MaxEvents 10 |

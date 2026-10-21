@@ -5,7 +5,7 @@ pub mod volume;
 use crate::{
     config::{Config, VolumeConfig},
     engine::{self, Event, Sink},
-    journal::parse_batch,
+    journal::{Batch, parse_batch},
     state::{Checkpoint, FileStore},
     stop::Stop,
 };
@@ -21,11 +21,34 @@ use windows_sys::Win32::Foundation::ERROR_JOURNAL_ENTRY_DELETED;
 
 struct Worker {
     config: VolumeConfig,
+    lane: Lane,
     checkpoint: Option<Checkpoint>,
     store: FileStore,
     restart: bool,
     invalidated: bool,
     retry_at: Instant,
+}
+
+enum Lane {
+    Live,
+    History { live_store: FileStore },
+}
+
+impl Lane {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::History { .. } => "history",
+        }
+    }
+}
+
+struct StopOnExit(Stop);
+
+impl Drop for StopOnExit {
+    fn drop(&mut self) {
+        self.0.request();
+    }
 }
 
 impl Worker {
@@ -42,11 +65,15 @@ impl Worker {
         {
             self.invalidated = true;
         }
-        eprintln!("volume {}: {error:#}", self.config.name);
+        eprintln!(
+            "volume {} ({}): {error:#}",
+            self.config.name,
+            self.lane.name()
+        );
         sink.write(&Event::new(
             engine::HEALTH,
             json!({
-                "volume_name": self.config.name, "configured_path": self.config.path,
+                "volume_name": format!("{} ({})", self.config.name, self.lane.name()), "configured_path": self.config.path,
                 "checkpoint": self.checkpoint, "error": format!("{error:#}"),
                 "retry_interval_ms": retry_ms
             }),
@@ -100,12 +127,32 @@ fn collect(
     let config = Config::load(config_path)?;
     let poll = Duration::from_millis(config.poll_interval_ms);
     let interval = Duration::from_millis(config.event_interval_ms);
+    let live_path = state_path.join("live");
+    std::fs::create_dir_all(&live_path)
+        .context("create private inherited live-checkpoint directory")?;
+    let volume_count = config.volumes.len();
     let mut workers = Vec::new();
     for volume in config.volumes {
+        let live_store = FileStore::new(&live_path, &volume.name);
+        let live_checkpoint = live_store.load()?;
+        if let Some(checkpoint) = &live_checkpoint {
+            checkpoint.validate_live()?;
+        }
         let store = FileStore::new(state_path, &volume.name);
         let checkpoint = store.load()?;
         workers.push(Worker {
+            config: volume.clone(),
+            lane: Lane::Live,
+            checkpoint: live_checkpoint,
+            store: live_store,
+            restart: true,
+            invalidated: false,
+            retry_at: Instant::now(),
+        });
+        let live_store = FileStore::new(&live_path, &volume.name);
+        workers.push(Worker {
             config: volume,
+            lane: Lane::History { live_store },
             checkpoint,
             store,
             restart: true,
@@ -115,75 +162,159 @@ fn collect(
     }
     sink.write(&Event::new(
         engine::LIFECYCLE,
-        json!({"state": "started", "volume_count": workers.len()}),
+        json!({"state": "started", "volume_count": volume_count}),
     ))?;
-    ready()?;
+    std::thread::scope(|scope| -> Result<()> {
+        let _cancel_on_unwind = StopOnExit(stop.clone());
+        let mut handles = Vec::new();
+        for worker in workers {
+            handles.push(scope.spawn(move || {
+                let _cancel_on_exit = StopOnExit(stop.clone());
+                let label = format!("volume {} ({})", worker.config.name, worker.lane.name());
+                collect_worker(worker, stop, poll, interval, config.retry_interval_ms)
+                    .with_context(|| label)
+            }));
+        }
+        let mut result = ready();
+        if result.is_err() {
+            stop.request();
+        }
+        for handle in handles {
+            let outcome = handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("collector worker panicked"))
+                .and_then(|result| result);
+            if let Err(error) = outcome {
+                eprintln!("worker stopped: {error:#}");
+                if result.is_ok() {
+                    result = Err(error);
+                }
+            }
+        }
+        result
+    })?;
+    sink.write(&Event::new(
+        engine::LIFECYCLE,
+        json!({"state": "stopped", "volume_count": volume_count}),
+    ))?;
+    Ok(())
+}
+
+fn collect_worker(
+    mut worker: Worker,
+    stop: &Stop,
+    poll: Duration,
+    interval: Duration,
+    retry_ms: u64,
+) -> Result<()> {
+    let mut sink = eventlog::EventLog::open(stop)?;
     while !stop.requested() {
-        for worker in &mut workers {
-            if stop.requested() {
-                break;
-            }
-            if Instant::now() < worker.retry_at {
-                continue;
-            }
-            // Only source reads/decoding are retryable. Sink and checkpoint failures stop the collector.
-            let read = (|| -> Result<_> {
-                let volume = volume::Volume::open(&worker.config.path)?;
-                let journal = volume.query(stop)?;
-                let plan = engine::reconcile(
-                    worker.checkpoint.as_ref(),
-                    &volume.identity,
-                    &journal.bounds,
-                    worker.restart,
-                    worker.invalidated,
-                )?;
-                let bytes = volume.read(plan.checkpoint.next_usn, &journal, stop)?;
-                // StartUsn=0 is special: Windows can silently choose a newer oldest record.
-                if plan.checkpoint.next_usn == 0 {
-                    let after = volume.query(stop)?;
-                    anyhow::ensure!(
-                        after.bounds.id == journal.bounds.id && after.bounds.oldest()? == 0,
-                        "journal bounds changed during zero-cursor read; requery before establishing coverage"
-                    );
-                }
-                let batch = parse_batch(&bytes, plan.checkpoint.next_usn)?;
-                Ok((plan, batch))
-            })();
-            let (plan, batch) = match read {
-                Ok(result) => result,
-                Err(error) => {
-                    if stop.requested() {
-                        break;
-                    }
-                    worker.source_failed(&error, sink, config.retry_interval_ms)?;
-                    continue;
-                }
-            };
-            if stop.requested() {
-                break;
-            }
-            let mut checkpoint = engine::apply_plan(plan, sink, &mut worker.store)?;
-            worker.restart = false;
-            worker.invalidated = false;
-            engine::deliver(
-                &mut checkpoint,
-                &batch,
-                sink,
-                &mut worker.store,
-                stop,
-                interval,
-            )
-            .with_context(|| format!("deliver/checkpoint volume {}", worker.config.name))?;
-            worker.checkpoint = Some(checkpoint);
+        if Instant::now() >= worker.retry_at {
+            step(&mut worker, stop, &mut sink, interval, retry_ms)?;
         }
         if stop.wait(poll) {
             break;
         }
     }
-    sink.write(&Event::new(
-        engine::LIFECYCLE,
-        json!({"state": "stopped", "volume_count": workers.len()}),
-    ))?;
+    Ok(())
+}
+
+fn step(
+    worker: &mut Worker,
+    stop: &Stop,
+    sink: &mut impl Sink,
+    interval: Duration,
+    retry_ms: u64,
+) -> Result<()> {
+    let live = match &worker.lane {
+        Lane::Live => None,
+        Lane::History { live_store } => match live_store.load()? {
+            Some(checkpoint) => {
+                checkpoint.validate_live()?;
+                Some(checkpoint)
+            }
+            None => return Ok(()),
+        },
+    };
+    // Only source reads/decoding are retryable. Sink and checkpoint failures stop the collector.
+    let read = (|| -> Result<_> {
+        let volume = volume::Volume::open(&worker.config.path)?;
+        let journal = volume.query(stop)?;
+        let plan = if let Some(live) = &live {
+            if live.volume_identity != volume.identity
+                || live.journal_id != journal.bounds.id
+                || live.backfill_end > journal.bounds.next_usn
+            {
+                return Ok(None);
+            }
+            engine::reconcile_history(
+                worker.checkpoint.as_ref(),
+                live,
+                &volume.identity,
+                &journal.bounds,
+                worker.restart,
+                worker.invalidated,
+            )?
+        } else {
+            engine::reconcile_live(
+                worker.checkpoint.as_ref(),
+                &volume.identity,
+                &journal.bounds,
+                worker.restart,
+                worker.invalidated,
+            )?
+        };
+        if live.is_some() && plan.checkpoint.next_usn >= plan.checkpoint.backfill_end {
+            let next_usn = plan.checkpoint.next_usn;
+            return Ok(Some((
+                plan,
+                Batch {
+                    next_usn,
+                    records: Vec::new(),
+                },
+            )));
+        }
+        let bytes = volume.read(plan.checkpoint.next_usn, &journal, stop)?;
+        // StartUsn=0 is special: Windows can silently choose a newer oldest record.
+        if plan.checkpoint.next_usn == 0 {
+            let after = volume.query(stop)?;
+            anyhow::ensure!(
+                after.bounds.id == journal.bounds.id && after.bounds.oldest()? == 0,
+                "journal bounds changed during zero-cursor read; requery before establishing coverage"
+            );
+        }
+        let mut batch = parse_batch(&bytes, plan.checkpoint.next_usn)?;
+        if live.is_some() {
+            batch = engine::historical_batch(batch, plan.checkpoint.backfill_end);
+        }
+        Ok(Some((plan, batch)))
+    })();
+    let (plan, batch) = match read {
+        Ok(Some(result)) => result,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            if stop.requested() {
+                return Ok(());
+            }
+            return worker.source_failed(&error, sink, retry_ms);
+        }
+    };
+    if stop.requested() {
+        return Ok(());
+    }
+    let mut checkpoint = engine::apply_plan(plan, sink, &mut worker.store)?;
+    worker.restart = false;
+    worker.invalidated = false;
+    engine::deliver(
+        &mut checkpoint,
+        &batch,
+        sink,
+        &mut worker.store,
+        stop,
+        interval,
+    )
+    .with_context(|| format!("deliver/checkpoint volume {}", worker.config.name))?;
+    worker.checkpoint = Some(checkpoint);
     Ok(())
 }
 
@@ -212,6 +343,7 @@ mod tests {
             caught_up: true,
         };
         let mut worker = Worker {
+            lane: Lane::Live,
             config: VolumeConfig {
                 name: "fixture".into(),
                 path: r"X:\".into(),
@@ -264,5 +396,22 @@ mod tests {
         drop(lock_state(&path).unwrap());
         std::fs::remove_file(path.join("collector.lock")).unwrap();
         std::fs::remove_dir(path).unwrap();
+    }
+
+    #[test]
+    fn worker_exit_or_panic_cancels_peer_lanes() {
+        for panic in [false, true] {
+            let stop = Stop::default();
+            let peer_stop = stop.clone();
+            let peer = std::thread::spawn(move || peer_stop.wait(Duration::from_secs(60)));
+            let worker_stop = stop.clone();
+            let worker = std::thread::spawn(move || {
+                let _cancel = StopOnExit(worker_stop);
+                assert!(!panic, "injected worker panic");
+            });
+            assert_eq!(worker.join().is_err(), panic);
+            assert!(peer.join().unwrap());
+            assert!(stop.requested());
+        }
     }
 }

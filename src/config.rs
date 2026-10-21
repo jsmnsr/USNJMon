@@ -11,7 +11,7 @@ pub struct Config {
     pub retry_interval_ms: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct VolumeConfig {
     pub name: String,

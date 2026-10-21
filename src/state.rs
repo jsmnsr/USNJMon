@@ -30,6 +30,15 @@ impl Checkpoint {
         );
         Ok(())
     }
+
+    pub fn validate_live(&self) -> Result<()> {
+        self.validate()?;
+        ensure!(
+            self.next_usn >= self.backfill_end && self.caught_up,
+            "invalid live checkpoint: cursor precedes its split boundary or lane is not live"
+        );
+        Ok(())
+    }
 }
 
 pub trait Store {
