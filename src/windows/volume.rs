@@ -205,12 +205,12 @@ impl Volume {
                     return Err(io::Error::from_raw_os_error(ERROR_OPERATION_ABORTED as i32).into());
                 }
             }
-            if unsafe {
-                GetOverlappedResult(self.handle.as_raw_handle(), &overlapped, &mut returned, 0)
-            } == 0
-            {
-                return Err(io::Error::last_os_error()).context("complete journal I/O");
-            }
+        }
+        if unsafe {
+            GetOverlappedResult(self.handle.as_raw_handle(), &overlapped, &mut returned, 0)
+        } == 0
+        {
+            return Err(io::Error::last_os_error()).context("complete journal I/O");
         }
         ensure!(
             returned as usize <= buffer.len(),
@@ -224,11 +224,39 @@ impl Volume {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::os::windows::fs::OpenOptionsExt;
     #[test]
-    fn cancellation_does_not_need_a_volume() {
+    fn native_completion_and_preflight_cancellation_on_owned_fixture_file() {
+        let path = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!("ioctl-fixture-{}.tmp", std::process::id()));
+        let file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .custom_flags(FILE_FLAG_OVERLAPPED)
+            .open(&path)
+            .unwrap();
+        let fixture = Volume {
+            handle: file.into(),
+            identity: "owned-test-file-not-a-volume".into(),
+        };
+        const FSCTL_GET_COMPRESSION: u32 = 0x0009003c;
+        let result = fixture.ioctl(FSCTL_GET_COMPRESSION, &[], 2, &Stop::default());
         let stop = Stop::default();
         stop.request();
-        assert!(stop.wait(Duration::from_secs(60)));
+        let cancelled = fixture.ioctl(FSCTL_GET_COMPRESSION, &[], 2, &stop);
+        drop(fixture);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(result.unwrap().len(), 2);
+        assert_eq!(
+            cancelled
+                .unwrap_err()
+                .downcast_ref::<io::Error>()
+                .unwrap()
+                .raw_os_error(),
+            Some(ERROR_OPERATION_ABORTED as i32)
+        );
     }
 }

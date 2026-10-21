@@ -17,6 +17,10 @@ Implementation was checked against these Microsoft references:
   reasons, 64/128-bit file IDs, timestamps and minor-version compatibility.
 - [CancelIoEx](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelioex):
   cancellation is not completion; retain buffers until overlapped I/O drains.
+- [DeviceIoControl](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-deviceiocontrol):
+  use `GetOverlappedResult` for completed byte counts on overlapped handles,
+  including calls that finish immediately. A non-invasive Windows test queries
+  compression metadata on its own disposable file, not a journal or volume.
 - [ReportEventW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reporteventw):
   write failures, insertion size limits, literal string insertion formatting and
   Windows-generated event timestamps.
