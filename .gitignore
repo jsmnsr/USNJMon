@@ -1,0 +1,4 @@
+/target/
+*.evtx
+/config.local.json
+/state/
