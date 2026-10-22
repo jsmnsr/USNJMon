@@ -14,6 +14,7 @@ pub const CAUGHT_UP: u32 = 103;
 pub const HEALTH: u32 = 104;
 pub const FATAL: u32 = 105;
 pub const LIFECYCLE: u32 = 106;
+pub const FILTER_SUMMARY: u32 = 107;
 
 #[derive(Clone, Debug)]
 pub struct Event {
@@ -30,6 +31,9 @@ impl Event {
 
 pub trait Sink {
     fn write(&mut self, event: &Event) -> Result<()>;
+    fn finish_batch(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -253,6 +257,7 @@ pub fn deliver(
             return Ok(());
         }
     }
+    sink.finish_batch()?;
     let mut next = checkpoint.clone();
     next.next_usn = batch.next_usn;
     if !next.caught_up && next.next_usn >= next.backfill_end {

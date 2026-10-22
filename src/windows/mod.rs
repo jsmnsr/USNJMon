@@ -1,3 +1,4 @@
+mod discovery;
 pub mod eventlog;
 pub mod service;
 pub mod volume;
@@ -5,6 +6,7 @@ pub mod volume;
 use crate::{
     config::{Config, VolumeConfig},
     engine::{self, Event, Sink},
+    filter::{FilteringSink, Policy},
     journal::{Batch, parse_batch},
     state::{Checkpoint, FileStore},
     stop::Stop,
@@ -21,6 +23,7 @@ use windows_sys::Win32::Foundation::ERROR_JOURNAL_ENTRY_DELETED;
 
 struct Worker {
     config: VolumeConfig,
+    policy: Policy,
     lane: Lane,
     checkpoint: Option<Checkpoint>,
     store: FileStore,
@@ -125,14 +128,25 @@ fn collect(
     ready: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let config = Config::load(config_path)?;
+    let policy = config.path_filters.compile()?;
+    let selection = discovery::select(&config.volumes)?;
+    for (path, error) in selection.warnings {
+        sink.write(&Event::new(
+            engine::HEALTH,
+            json!({
+                "volume_name": "discovery", "configured_path": path,
+                "checkpoint": null, "error": error, "retry_interval_ms": 0
+            }),
+        ))?;
+    }
     let poll = Duration::from_millis(config.poll_interval_ms);
     let interval = Duration::from_millis(config.event_interval_ms);
     let live_path = state_path.join("live");
     std::fs::create_dir_all(&live_path)
         .context("create private inherited live-checkpoint directory")?;
-    let volume_count = config.volumes.len();
+    let volume_count = selection.volumes.len();
     let mut workers = Vec::new();
-    for volume in config.volumes {
+    for volume in selection.volumes {
         let live_store = FileStore::new(&live_path, &volume.name);
         let live_checkpoint = live_store.load()?;
         if let Some(checkpoint) = &live_checkpoint {
@@ -142,6 +156,7 @@ fn collect(
         let checkpoint = store.load()?;
         workers.push(Worker {
             config: volume.clone(),
+            policy: policy.clone(),
             lane: Lane::Live,
             checkpoint: live_checkpoint,
             store: live_store,
@@ -152,6 +167,7 @@ fn collect(
         let live_store = FileStore::new(&live_path, &volume.name);
         workers.push(Worker {
             config: volume,
+            policy: policy.clone(),
             lane: Lane::History { live_store },
             checkpoint,
             store,
@@ -272,6 +288,7 @@ fn step(
                     next_usn,
                     records: Vec::new(),
                 },
+                volume,
             )));
         }
         let bytes = volume.read(plan.checkpoint.next_usn, &journal, stop)?;
@@ -287,9 +304,9 @@ fn step(
         if live.is_some() {
             batch = engine::historical_batch(batch, plan.checkpoint.backfill_end);
         }
-        Ok(Some((plan, batch)))
+        Ok(Some((plan, batch, volume)))
     })();
-    let (plan, batch) = match read {
+    let (plan, batch, volume) = match read {
         Ok(Some(result)) => result,
         Ok(None) => return Ok(()),
         Err(error) => {
@@ -305,10 +322,17 @@ fn step(
     let mut checkpoint = engine::apply_plan(plan, sink, &mut worker.store)?;
     worker.restart = false;
     worker.invalidated = false;
+    let mut filtered = FilteringSink::new(
+        sink,
+        &worker.policy,
+        |event: &Event| volume.resolve_record_path(event),
+        &worker.config.name,
+        worker.lane.name(),
+    );
     engine::deliver(
         &mut checkpoint,
         &batch,
-        sink,
+        &mut filtered,
         &mut worker.store,
         stop,
         interval,
@@ -343,6 +367,7 @@ mod tests {
             caught_up: true,
         };
         let mut worker = Worker {
+            policy: crate::filter::PathFilters::default().compile().unwrap(),
             lane: Lane::Live,
             config: VolumeConfig {
                 name: "fixture".into(),

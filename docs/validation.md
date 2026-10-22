@@ -47,6 +47,18 @@ scoped approval.
    historical events and their cursor keep advancing. Check both state files,
    graceful SCM restart/resume, and disjoint ranges at the persisted split.
    Do not reset the existing historical cursor to demonstrate live behavior.
+10. For volume selectors, compare startup discovery with known local NTFS GUIDs
+    and mount aliases; include/exclude a test volume through different aliases.
+    Confirm excluded volumes have no workers, no-match includes fail explicitly,
+    and unreadable discovery candidates report 104. No journals should be created.
+11. On an approved fixture volume, create files inside/outside configured
+    whitelist/blacklist roots. Check case and component boundaries, both lanes,
+    default unresolved inclusion, opt-in unresolved exclusion and 107 counts.
+    Delete/rename parents and confirm no historical paths are fabricated.
+    Verify all-filtered batches advance while injected summary-write failures
+    retain the old checkpoint. Changing filters must not replay skipped history
+    automatically. Native automated path tests open only their owned directory
+    fixture by ID; they do not enumerate host journals or register/write events.
 
 Record OS/build, filesystem, toolchain, target and results without committing
 private filenames, machine events or credentials. Live SCM installation,

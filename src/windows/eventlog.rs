@@ -51,7 +51,7 @@ pub struct EventLog(REGHANDLE);
 
 fn descriptor(id: u32) -> Result<EVENT_DESCRIPTOR> {
     ensure!(
-        schema::RECORD_IDS.contains(&id) || (101..=106).contains(&id),
+        schema::RECORD_IDS.contains(&id) || (101..=107).contains(&id),
         "unknown event ID {id}"
     );
     Ok(EVENT_DESCRIPTOR {
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn descriptors_match_manifest_compiler_output() {
         let header: String = HEADER.chars().filter(|c| !c.is_whitespace()).collect();
-        for id in schema::RECORD_IDS.into_iter().chain(101..=106) {
+        for id in schema::RECORD_IDS.into_iter().chain(101..=107) {
             let d = descriptor(id).unwrap();
             let expected = format!(
                 "={{0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x},0x{:x}}}",

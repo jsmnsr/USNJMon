@@ -1,5 +1,6 @@
 pub mod config;
 pub mod engine;
+pub mod filter;
 pub mod journal;
 pub mod schema;
 pub mod state;

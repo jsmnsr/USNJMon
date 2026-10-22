@@ -24,6 +24,7 @@ Keep provider registration/resources available for archived-event rendering.
 | 104 | Warning | Source read/parse failure, including unsupported records; retry |
 | 105 | Error | Fatal collector failure (best effort if destination failed) |
 | 106 | Information | Collector started/stopped |
+| 107 | Information | Per-batch path-filter suppression and unresolved counts |
 
 Exactly one category is assigned per USN record. Priority is delete,
 rename-new, rename-old, create, security, data, metadata, other. For example,
@@ -53,7 +54,7 @@ Rename records are not paired/invented. Unknown bits are never discarded.
 | `MajorVersion`, `MinorVersion` | UInt16, source record layout version |
 | `RecordLength` | UInt32, original aligned record byte length |
 | `BackfillEnd` | Int64, exclusive historical boundary / start of live range |
-| `PathStatus`, `FullPath` | UnicodeString, `unresolved` / empty in this version |
+| `PathStatus`, `FullPath` | UnicodeString, `parent_current_only` / current-parent GUID-path candidate, or `unresolved:<reason>` / empty |
 | `FileNameUtf16Hex` | UnicodeString, space-separated four-digit original UTF-16 units |
 | `FileNameLossy` | Boolean, display Unicode needed replacement characters |
 | `FileNameDisplayEscaped` | Boolean, display control characters were escaped |
@@ -66,6 +67,15 @@ the display filename; original units remain lossless in `FileNameUtf16Hex`.
 Hex output types format the General description; Event XML can serialize the
 same unsigned values as decimal. Parse numeric fields numerically rather than
 requiring a `0x` prefix.
+
+`FullPath` combines a **currently resolved parent** with the record's name. It
+is never claimed to be a historical path. Parent renames and multiple links may
+make it stale or ambiguous relative to the event time. Resolution does not
+require the child file to still exist. Unresolved reasons include
+`parent_open_win32_<code>`, `parent_path_win32_<code>`, invalid UTF-16/control
+names, volume mismatches and path-length limits. Earlier versions emitted
+`PathStatus=unresolved` without a reason. Path filtering uses the candidate's
+volume-relative part; the emitted `FullPath` retains the volume GUID.
 
 ## Health/coverage fields
 
@@ -93,6 +103,16 @@ prove lost history; a subsequent 102 reports a detected gap.
 
 105: `SchemaVersion`, `Error`.
 106: `SchemaVersion`, `State` (`started`/`stopped`), `VolumeCount`.
+107: `SchemaVersion`, `VolumeName`, `Lane` (`live`/`history`), `Blacklisted`,
+`NotWhitelisted`, `UnresolvedExcluded`, `UnresolvedPaths`. Counts are UInt64,
+per completed read batch, not cumulative. Blacklist has priority over whitelist.
+`UnresolvedPaths` includes both retained and excluded unresolved records; it
+overlaps `UnresolvedExcluded`. No summary is emitted when all four are zero.
+A summary write must succeed before advancing the batch checkpoint.
+
+Discovery warnings use 104 with `VolumeName=discovery` and
+`RetryIntervalMs=0` (startup-only, not a scheduled retry); explicit workers and
+selected volumes still use ordinary nonzero retry intervals.
 
 Health events can repeat on retry/replay and have no record deduplication
 identity. Health `VolumeName` includes `(live)` or `(history)` to identify the

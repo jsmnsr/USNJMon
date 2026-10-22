@@ -2,6 +2,16 @@
 
 Implementation was checked against these Microsoft references:
 
+- [FindFirstVolumeW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstvolumew),
+  FindNextVolumeW and FindVolumeClose enumerate volume GUIDs (not drive-letter
+  ordering). GetVolumeInformationW limits discovery to NTFS;
+  GetVolumePathNamesForVolumeNameW supplies mount aliases.
+- [OpenFileById](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid):
+  zero desired access for parent metadata, full sharing and backup-semantics
+  directory flag; no privilege enablement or file-content read.
+- [GetFinalPathNameByHandleW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew):
+  VOLUME_NAME_GUID works without drive letters. Results are current paths,
+  not USN historical reconstruction; errors are labeled as unresolved.
 - [FSCTL_READ_USN_JOURNAL](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_read_usn_journal):
   local volume handles and returned USN buffer.
 - [USN_JOURNAL_DATA_V0](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_journal_data_v0)

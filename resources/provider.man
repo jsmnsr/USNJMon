@@ -91,6 +91,15 @@
             <data name="State" inType="win:UnicodeString"/>
             <data name="VolumeCount" inType="win:UInt32"/>
           </template>
+          <template tid="FilterSummary">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="VolumeName" inType="win:UnicodeString"/>
+            <data name="Lane" inType="win:UnicodeString"/>
+            <data name="Blacklisted" inType="win:UInt64"/>
+            <data name="NotWhitelisted" inType="win:UInt64"/>
+            <data name="UnresolvedExcluded" inType="win:UInt64"/>
+            <data name="UnresolvedPaths" inType="win:UInt64"/>
+          </template>
         </templates>
         <events>
           <event value="1000" version="2" symbol="RecordCreated" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
@@ -107,6 +116,7 @@
           <event value="104" version="2" symbol="Health" channel="Operational" level="win:Warning" keywords="Collector" template="Health" message="$(string.Health)"/>
           <event value="105" version="2" symbol="Fatal" channel="Operational" level="win:Error" keywords="Collector" template="Fatal" message="$(string.Fatal)"/>
           <event value="106" version="2" symbol="Lifecycle" channel="Operational" level="win:Informational" keywords="Collector" template="Lifecycle" message="$(string.Lifecycle)"/>
+          <event value="107" version="2" symbol="FilterSummary" channel="Operational" level="win:Informational" keywords="Collector" template="FilterSummary" message="$(string.FilterSummary)"/>
         </events>
       </provider>
     </events>
@@ -118,9 +128,10 @@
         <string id="Coverage" value="Retained journal coverage: %2%n%nVolume: %3%nJournal ID: %4%nFirst retained USN: %5%nLowest valid USN: %6%nNext journal USN: %7%nResume USN: %8%nBackfill boundary: %9%nPrevious checkpoint present: %10%nPrevious volume: %11%nPrevious journal: %12%nPrevious cursor: %13%nCoverage: %14%nMissing records: %15%nSchema: %1"/>
         <string id="Gap" value="Journal continuity gap: %2%n%nSome history may be unavailable. No expired records can be recovered.%nVolume: %3%nJournal ID: %4%nFirst retained USN: %5%nLowest valid USN: %6%nNext journal USN: %7%nResume USN: %8%nBackfill boundary: %9%nPrevious checkpoint present: %10%nPrevious volume: %11%nPrevious journal: %12%nPrevious cursor: %13%nCoverage: %14%nMissing records: %15%nSchema: %1"/>
         <string id="CaughtUp" value="Historical backfill boundary reached.%n%nVolume: %2%nJournal ID: %3%nBackfill boundary: %4%nNext cursor: %5%nSchema: %1"/>
-        <string id="Health" value="Volume read failed; retrying without advancing its checkpoint.%n%nVolume name: %2%nConfigured path: %3%nError: %4%nRetry delay (ms): %5%nCheckpoint present: %6%nVolume identity: %7%nJournal ID: %8%nNext cursor: %9%nSchema: %1"/>
+        <string id="Health" value="Volume discovery/read warning; checkpoint not advanced.%n%nVolume name: %2%nConfigured path: %3%nError: %4%nRetry delay (ms; 0 means startup discovery only): %5%nCheckpoint present: %6%nVolume identity: %7%nJournal ID: %8%nNext cursor: %9%nSchema: %1"/>
         <string id="Fatal" value="Collector stopped because of a fatal failure.%n%nError: %2%nRestart may replay accepted events from the uncommitted batch.%nSchema: %1"/>
         <string id="Lifecycle" value="Collector %2.%n%nConfigured volumes: %3%nSchema: %1"/>
+        <string id="FilterSummary" value="Path filtering summary for a completed batch.%n%nVolume: %2%nLane: %3%nBlacklisted records: %4%nOutside whitelist: %5%nUnresolved records excluded: %6%nUnresolved paths (included or excluded): %7%nPath decisions use current parent paths, not historical path reconstruction.%nCounts can repeat after checkpoint replay.%nSchema: %1"/>
       </stringTable>
     </resources>
   </localization>

@@ -258,6 +258,23 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
                 Field("State", text(p, "state")?),
                 Field("VolumeCount", u32_field(p, "volume_count")?),
             ]),
+            engine::FILTER_SUMMARY => fields.extend([
+                Field("VolumeName", text(p, "volume_name")?),
+                Field("Lane", text(p, "lane")?),
+                Field("Blacklisted", Data::U64(u64_field(p, "blacklisted")?)),
+                Field(
+                    "NotWhitelisted",
+                    Data::U64(u64_field(p, "not_whitelisted")?),
+                ),
+                Field(
+                    "UnresolvedExcluded",
+                    Data::U64(u64_field(p, "unresolved_excluded")?),
+                ),
+                Field(
+                    "UnresolvedPaths",
+                    Data::U64(u64_field(p, "unresolved_paths")?),
+                ),
+            ]),
             _ => bail!("unsupported event ID {}", event.id),
         }
     }
@@ -363,6 +380,13 @@ mod tests {
         examples.push(Event::new(
             engine::LIFECYCLE,
             json!({"state":"stopped","volume_count":1}),
+        ));
+        examples.push(Event::new(
+            engine::FILTER_SUMMARY,
+            json!({
+                "volume_name":"fixture","lane":"live","blacklisted":1,"not_whitelisted":2,
+                "unresolved_excluded":3,"unresolved_paths":4
+            }),
         ));
         for event in examples {
             let node = manifest

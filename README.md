@@ -2,7 +2,7 @@
 
 An independent **Rust Windows x64 service** that reads existing local NTFS USN
 journals and collects **live changes while independently backfilling retained
-history**. Version 0.3 writes native, named events through provider **UsnEventLog**
+history**. Version 0.4 writes native, named events through provider **UsnEventLog**
 to **UsnEventLog/Operational**. Event Viewer shows readable, multiline
 descriptions in **General** and typed fields in **Details**. No JSON parser is
 needed. It does not depend on Sysmon or impersonate a Microsoft provider.
@@ -30,7 +30,7 @@ when reasons combine is **delete > rename-new > rename-old > create > security
 > data > metadata > other**. Every reason remains visible in `Reasons` and
 `ReasonFlags`, regardless of the primary category. These are journal-record
 categories, not reconstructed operations or guaranteed rename pairs.
-Health/coverage IDs 101-106 remain separate.
+Health/coverage IDs 101-106 and filtering summary ID 107 remain separate.
 
 An event's General tab looks like:
 
@@ -126,6 +126,104 @@ A state-directory lock excludes concurrent collectors/upgrades. Custom state
 directories must have equivalent private ACLs. `check-config <config.json>`
 and `verify-resources <usn-eventlog-provider.dll>` are non-invasive.
 
+## Volume selection and path filters
+
+The example configuration discovers **all accessible local NTFS volumes at
+startup**, including volumes without drive letters. Omitting `volumes` has
+the same behavior. No journal is created: selected volumes without an active
+journal report health events and retry. Non-NTFS filesystems are not selected.
+Inaccessible discovery candidates produce warnings (104); the selection fails
+if no eligible volumes remain. Discovery runs on service start, not continuously:
+restart to discover newly attached volumes. Already selected volumes retry on
+disconnect/reconnect.
+
+```json
+{
+  "volumes": {
+    "include": [],
+    "exclude": ["D:\\"]
+  },
+  "path_filters": {
+    "whitelist": [],
+    "blacklist": [
+      "\\Windows\\Logs",
+      "\\Windows\\Temp",
+      "\\Windows\\SoftwareDistribution\\Download",
+      "\\ProgramData\\UsnEventLog"
+    ],
+    "unresolved": "include"
+  },
+  "poll_interval_ms": 200,
+  "event_interval_ms": 2,
+  "retry_interval_ms": 10000
+}
+```
+
+Volume selectors are exact drive roots (`C:` or `C:\`), directory mount-point
+roots, or volume GUID roots (`\\?\Volume{...}\`), not glob patterns.
+An empty `include` selects all discovered NTFS volumes; `exclude` wins.
+Aliases are resolved/deduplicated by volume GUID, so excluding a drive also
+excludes its GUID/mount aliases. A requested include that cannot be discovered
+is an error rather than silently narrowing collection. At most 128 volumes
+may be selected; narrow selectors if needed. Discovery uses stable checkpoint
+names `volume-<GUID>`.
+
+The existing explicit list is still supported and preserves its checkpoint names:
+
+```json
+"volumes": [
+  { "name": "system", "path": "C:\\" },
+  { "name": "data", "path": "D:\\" }
+]
+```
+
+Explicit paths must end in `\`. Do not mix list and selector forms. Keep an
+existing explicit list to retain its cursor names: switching to auto-discovery
+uses different checkpoint filenames and can replay history. The installer
+does not rewrite the installed configuration or migrate cursor names.
+
+Path rules apply to **both live and historical record events**, not health,
+coverage or lifecycle events. They are literal, volume-relative prefixes:
+`\Users\Alice\Documents` matches that path and its descendants on every selected
+volume, but not `\Users\Alice\DocumentsBackup`. They also work for a specific
+filename. Matching uses Unicode lowercase comparison, accepts `/` as a separator,
+and ignores a trailing separator. No wildcards, environment expansion, drive
+letters, UNC paths or `..` are allowed. Blacklist always wins; an empty whitelist
+permits all paths not blacklisted. For a focused workload use, for example,
+`"whitelist": ["\\Users\\Alice\\Documents", "\\Source"]`.
+
+Omitting `path_filters` or `blacklist` uses the four exclusions above. An explicit
+`"blacklist": []` removes those defaults; custom arrays replace, not extend,
+the defaults. These modest defaults reduce Windows log/temp/update-download
+and collector-state noise, **not all background activity**. User profiles,
+user Temp, Recycle Bin, executable/system directories and security events are
+not broadly excluded. Windows Temp can still contain important activity:
+remove that exclusion for security/forensic collection. Configured exclusions
+are deliberate coverage reductions, not a forensic guarantee.
+
+USN records contain a name and parent ID, **not a historical full path**.
+The collector opens the parent by file ID with zero desired access, queries its
+current volume-GUID path, and appends the record's original name. It labels this
+candidate `PathStatus=parent_current_only`; `FullPath` is not proof of where a
+historical record occurred. Parent moves, name reuse, hard links and reparse
+points can make current-path filtering differ from historical intent. The
+record's file does not have to still exist, but its parent must be resolvable.
+No path cache invents deleted parents or historical directory trees.
+
+Unresolvable, inaccessible, malformed-name and overlong-path records default
+to **included**, even with a whitelist. Their `FullPath` is empty and `PathStatus`
+contains an explicit `unresolved:<reason>` (including Win32 error codes).
+Set `"unresolved": "exclude"` only for a strict best-effort whitelist when
+losing these events is acceptable. This is a telemetry noise filter, not an
+access-control boundary.
+
+Event **107** reports per-completed-batch blacklist, whitelist and unresolved
+counts before checkpoint advancement; unresolvable records also contribute
+to this summary when included. All-filtered batches still advance, and a failed
+summary/event write prevents advancing that batch. Counts can repeat on replay.
+Changing filters affects future processing; it does not recover previously
+filtered records or erase existing log data. Restart after editing configuration.
+
 ## Upgrade from the JSON-only version
 
 Stop all service/foreground collection, close Event Viewer if it has resources
@@ -171,9 +269,9 @@ backfill, not recovery of expired history.
 
 ## Collection and durability
 
-Each volume has a stable administrator-chosen `name` plus a local mount-point
-root (`C:\`) or volume GUID root with trailing `\`. Use one entry per volume,
-not multiple aliases. Checkpoints bind the resolved **volume GUID + serial +
+Each volume has a stable explicit or discovered name plus a local mount-point
+or volume GUID root. Use one entry per volume, not multiple aliases.
+Checkpoints bind the resolved **volume GUID + serial +
 journal ID**, not a drive letter alone. Clones duplicating all identities are
 outside this guarantee. Configuration is validated at startup.
 
@@ -251,7 +349,8 @@ cannot be guaranteed.
 Only retained NTFS history exists to read. Wrapped/deleted records and activity
 before journal creation or while journaling was disabled cannot be recovered.
 USN reasons aggregate changes and may repeat at close. No full historical path
-is guessed: `PathStatus=unresolved`, `FullPath` empty. File/parent references and
+is reconstructed: `parent_current_only` is a current-parent candidate, not
+historical evidence; unresolved paths remain empty. File/parent references and
 names are record data. `SecurityId` is file metadata, **not an actor**; system
 PID/thread fields, when present, identify the collector.
 
@@ -264,9 +363,12 @@ buffers until completion. Stalled drivers, Event Log calls and disk flushes can
 delay shutdown; there is no hard forced deadline.
 
 Monitoring the volumes that hold this application's logs/checkpoints can
-generate **self-traffic**. Nothing is silently filtered to conceal it. For busy
-deployments, explicitly review placement on non-monitored storage and rate
-limits; the installer uses standard fixed Windows locations.
+generate **self-traffic**. Default path rules suppress resolvable collector-state
+and Windows log directory records; filtering summaries expose that suppression.
+Unresolved paths or nonstandard locations can still generate noise. For busy
+deployments, review placement on non-monitored storage and rate limits; the
+installer uses standard fixed Windows locations. Parent lookup adds synchronous
+metadata queries; stalls or heavy filtering work can delay either lane.
 
 The new channel defaults to **256 MiB**, overwrite-as-needed. A large backfill
 can overwrite its own earliest events. Size it for expanded events and
