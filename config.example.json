@@ -9,7 +9,8 @@
       "\\Windows\\Logs",
       "\\Windows\\Temp",
       "\\Windows\\SoftwareDistribution\\Download",
-      "\\ProgramData\\UsnEventLog"
+      "\\ProgramData\\UsnEventLog",
+      "\\ProgramData\\USNJMon"
     ],
     "unresolved": "include"
   },

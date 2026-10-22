@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, io::Read, path::Path};
+use std::collections::HashSet;
+use std::io::Read;
+use std::path::Path;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

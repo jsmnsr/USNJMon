@@ -1,37 +1,35 @@
-use crate::{
-    engine::{Event, Journal},
-    filter::ResolvedPath,
-    journal::BUFFER_SIZE,
-    stop::Stop,
-};
+//! Read-only native volume I/O with safe buffer lifetimes through completion/cancellation.
+//! FFI is required for USN controls and file-ID lookup, neither of which std exposes.
+
+use crate::engine::{Event, Journal};
+use crate::filter::ResolvedPath;
+use crate::journal::BUFFER_SIZE;
+use crate::stop::Stop;
 use anyhow::{Context, Result, ensure};
-use std::{
-    ffi::c_void,
-    io,
-    mem::{size_of, zeroed},
-    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
-    ptr::{null, null_mut},
+use std::ffi::c_void;
+use std::io;
+use std::mem;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+use std::ptr;
+use windows_sys::Win32::Foundation::{
+    ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED, GENERIC_READ, INVALID_HANDLE_VALUE,
+    WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::{
-    Foundation::{
-        ERROR_IO_PENDING, ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED, GENERIC_READ,
-        INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
-    },
-    Storage::FileSystem::{
-        CreateFileW, ExtendedFileIdType, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-        FILE_FLAG_OVERLAPPED, FILE_ID_128, FILE_ID_DESCRIPTOR, FILE_SHARE_DELETE, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FileIdType, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
-        OPEN_EXISTING, OpenFileById, VOLUME_NAME_GUID,
-    },
-    System::{
-        IO::{CancelIoEx, DeviceIoControl, GetOverlappedResult, OVERLAPPED},
-        Threading::{CreateEventW, WaitForSingleObject},
-    },
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, ExtendedFileIdType, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_FLAG_OVERLAPPED, FILE_ID_128, FILE_ID_DESCRIPTOR, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, FileIdType, GetFinalPathNameByHandleW, GetVolumeInformationByHandleW,
+    OPEN_EXISTING, OpenFileById, VOLUME_NAME_GUID,
 };
+use windows_sys::Win32::System::IO::{
+    CancelIoEx, DeviceIoControl, GetOverlappedResult, OVERLAPPED,
+};
+use windows_sys::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 const FSCTL_QUERY_USN_JOURNAL: u32 = 0x000900f4;
 const FSCTL_READ_USN_JOURNAL: u32 = 0x000900bb;
 
+#[must_use]
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(Some(0)).collect()
 }
@@ -50,32 +48,35 @@ impl Volume {
     pub fn open(root: &str) -> Result<Self> {
         let guid = super::discovery::resolve_root(root)?;
         let path = wide(guid.trim_end_matches('\\'));
+        // SAFETY: Path is NUL-terminated; other pointers are optional NULL values.
         let raw = unsafe {
             CreateFileW(
                 path.as_ptr(),
                 GENERIC_READ,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                null(),
+                ptr::null(),
                 OPEN_EXISTING,
                 FILE_FLAG_OVERLAPPED,
-                null_mut(),
+                ptr::null_mut(),
             )
         };
         if raw == INVALID_HANDLE_VALUE {
             return Err(io::Error::last_os_error())
                 .context("open volume read-only (elevation required)");
         }
+        // SAFETY: CreateFileW succeeded and ownership is transferred exactly once.
         let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
         let mut serial = 0;
         let mut filesystem = [0u16; 32];
+        // SAFETY: The owned handle and all writable outputs remain valid with accurate lengths.
         if unsafe {
             GetVolumeInformationByHandleW(
                 handle.as_raw_handle(),
-                null_mut(),
+                ptr::null_mut(),
                 0,
                 &mut serial,
-                null_mut(),
-                null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
                 filesystem.as_mut_ptr(),
                 filesystem.len() as u32,
             )
@@ -84,8 +85,12 @@ impl Volume {
             return Err(io::Error::last_os_error())
                 .context("query opened volume identity and filesystem");
         }
-        let fs =
-            String::from_utf16(&filesystem[..filesystem.iter().position(|&c| c == 0).unwrap()])?;
+        let fs = String::from_utf16(
+            &filesystem[..filesystem
+                .iter()
+                .position(|&c| c == 0)
+                .expect("validated fixed-width native output")],
+        )?;
         ensure!(
             fs == "NTFS",
             "unsupported filesystem {fs}; only local NTFS is supported"
@@ -113,13 +118,14 @@ impl Volume {
             return Ok(ResolvedPath::unresolved("unrepresentable_filename"));
         }
         let descriptor = Self::parent_descriptor(parent)?;
+        // SAFETY: Handle is live and descriptor tag matches the initialized union member.
         let raw = unsafe {
             OpenFileById(
                 self.handle.as_raw_handle(),
                 &descriptor,
                 0,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                null(),
+                ptr::null(),
                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
             )
         };
@@ -129,8 +135,10 @@ impl Volume {
                 io::Error::last_os_error().raw_os_error().unwrap_or(0)
             )));
         }
+        // SAFETY: OpenFileById succeeded and ownership is transferred exactly once.
         let parent_handle = unsafe { OwnedHandle::from_raw_handle(raw) };
         let mut buffer = vec![0u16; 32768];
+        // SAFETY: Handle is live; buffer has the stated WCHAR capacity.
         let length = unsafe {
             GetFinalPathNameByHandleW(
                 parent_handle.as_raw_handle(),
@@ -157,9 +165,19 @@ impl Volume {
     pub fn query(&self, stop: &Stop) -> Result<Query> {
         let bytes = self.ioctl(FSCTL_QUERY_USN_JOURNAL, &[], 80, stop)?;
         ensure!(bytes.len() >= 56, "truncated USN_JOURNAL_DATA");
-        let i64_at = |n| i64::from_le_bytes(bytes[n..n + 8].try_into().unwrap());
+        let i64_at = |n| {
+            i64::from_le_bytes(
+                bytes[n..n + 8]
+                    .try_into()
+                    .expect("validated fixed-width native output"),
+            )
+        };
         let maximum_version = if bytes.len() >= 60 {
-            u16::from_le_bytes(bytes[58..60].try_into().unwrap())
+            u16::from_le_bytes(
+                bytes[58..60]
+                    .try_into()
+                    .expect("validated fixed-width native output"),
+            )
         } else {
             2
         };
@@ -168,7 +186,11 @@ impl Volume {
             "journal reports unsupported maximum record version {maximum_version}"
         );
         let bounds = Journal {
-            id: u64::from_le_bytes(bytes[..8].try_into().unwrap()),
+            id: u64::from_le_bytes(
+                bytes[..8]
+                    .try_into()
+                    .expect("validated fixed-width native output"),
+            ),
             first_usn: i64_at(8),
             next_usn: i64_at(16),
             lowest_valid_usn: i64_at(24),
@@ -181,8 +203,9 @@ impl Volume {
     }
 
     fn parent_descriptor(reference: &str) -> Result<FILE_ID_DESCRIPTOR> {
-        let mut descriptor: FILE_ID_DESCRIPTOR = unsafe { zeroed() };
-        descriptor.dwSize = size_of::<FILE_ID_DESCRIPTOR>() as u32;
+        // SAFETY: This C integer union has a valid zero representation; tag/member are set below.
+        let mut descriptor: FILE_ID_DESCRIPTOR = unsafe { mem::zeroed() };
+        descriptor.dwSize = mem::size_of::<FILE_ID_DESCRIPTOR>() as u32;
         match reference.len() {
             16 => {
                 descriptor.Type = FileIdType;
@@ -244,21 +267,25 @@ impl Volume {
         if stop.requested() {
             return Err(io::Error::from_raw_os_error(ERROR_OPERATION_ABORTED as i32).into());
         }
-        let raw_event = unsafe { CreateEventW(null(), 1, 0, null()) };
+        // SAFETY: Both pointers are optional NULL values for an unnamed, non-inheritable event.
+        let raw_event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
         if raw_event.is_null() {
             return Err(io::Error::last_os_error().into());
         }
+        // SAFETY: CreateEventW succeeded; transfer unique ownership.
         let event = unsafe { OwnedHandle::from_raw_handle(raw_event) };
-        let mut overlapped: OVERLAPPED = unsafe { zeroed() };
+        // SAFETY: Zero is the documented initial OVERLAPPED representation.
+        let mut overlapped: OVERLAPPED = unsafe { mem::zeroed() };
         overlapped.hEvent = event.as_raw_handle();
         let mut buffer = vec![0u8; size];
         let mut returned = 0;
+        // SAFETY: Buffers, event and OVERLAPPED remain in place until completion, including cancellation.
         let success = unsafe {
             DeviceIoControl(
                 self.handle.as_raw_handle(),
                 code,
                 if input.is_empty() {
-                    null()
+                    ptr::null()
                 } else {
                     input.as_ptr().cast::<c_void>()
                 },
@@ -275,11 +302,13 @@ impl Volume {
                 return Err(error).context("journal DeviceIoControl");
             }
             loop {
+                // SAFETY: The owned event handle remains open for the full wait.
                 let wait = unsafe { WaitForSingleObject(event.as_raw_handle(), 100) };
                 if wait == WAIT_OBJECT_0 {
                     break;
                 }
                 if stop.requested() || wait != WAIT_TIMEOUT {
+                    // SAFETY: This is the same live handle/OVERLAPPED pair used for the pending request.
                     let cancel = unsafe { CancelIoEx(self.handle.as_raw_handle(), &overlapped) };
                     if cancel == 0 {
                         let error = io::Error::last_os_error();
@@ -289,7 +318,7 @@ impl Volume {
                             );
                         }
                     }
-                    // Even cancellation must complete before the kernel-owned buffers can be dropped.
+                    // SAFETY: Keep all request storage live while waiting for cancellation/completion.
                     let completed = unsafe {
                         GetOverlappedResult(
                             self.handle.as_raw_handle(),
@@ -307,6 +336,7 @@ impl Volume {
                 }
             }
         }
+        // SAFETY: Request storage remains live and the request has completed or signaled its event.
         if unsafe {
             GetOverlappedResult(self.handle.as_raw_handle(), &overlapped, &mut returned, 0)
         } == 0
@@ -331,10 +361,12 @@ mod tests {
     fn parent_ids_and_candidate_paths_preserve_record_names_without_claiming_history() {
         let id = Volume::parent_descriptor("0001000000000042").unwrap();
         assert_eq!(id.Type, FileIdType);
+        // SAFETY: The verified tag selects the FileId union member initialized by parent_descriptor.
         assert_eq!(unsafe { id.Anonymous.FileId }, 0x0001000000000042);
         let id = Volume::parent_descriptor("00000000000000010000000000000042").unwrap();
         assert_eq!(id.Type, ExtendedFileIdType);
         assert_eq!(
+            // SAFETY: The verified tag selects the initialized ExtendedFileId member.
             unsafe { id.Anonymous.ExtendedFileId.Identifier },
             0x10000000000000042u128.to_le_bytes()
         );
@@ -383,8 +415,10 @@ mod tests {
             .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
             .open(&path)
             .unwrap();
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { zeroed() };
+        // SAFETY: This C integer-only output structure has a valid zero representation.
+        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { mem::zeroed() };
         assert_ne!(
+            // SAFETY: Owned fixture handle and aligned output storage remain live.
             unsafe { GetFileInformationByHandle(directory.as_raw_handle(), &mut info) },
             0
         );
@@ -393,6 +427,7 @@ mod tests {
             ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64
         );
         let mut buffer = [0u16; 4096];
+        // SAFETY: Owned fixture handle is live; buffer has the stated WCHAR capacity.
         let size = unsafe {
             GetFinalPathNameByHandleW(
                 directory.as_raw_handle(),

@@ -1,10 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{
-    fs::{self, OpenOptions},
-    io::{Read, Write},
-    path::{Path, PathBuf},
-};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -50,6 +48,7 @@ pub struct FileStore {
 }
 
 impl FileStore {
+    #[must_use]
     pub fn new(directory: &Path, name: &str) -> Self {
         Self {
             path: directory.join(format!("{name}.json")),
@@ -103,6 +102,7 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
     };
     let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
     let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: Both NUL-terminated buffers remain live for this synchronous call.
     if unsafe {
         MoveFileExW(
             from.as_ptr(),
@@ -119,7 +119,7 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(not(windows))]
 fn replace(from: &Path, to: &Path) -> Result<()> {
     fs::rename(from, to)?;
-    fs::File::open(to.parent().unwrap())?.sync_all()?;
+    fs::File::open(to.parent().context("checkpoint has no parent directory")?)?.sync_all()?;
     Ok(())
 }
 

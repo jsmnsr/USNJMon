@@ -18,11 +18,13 @@ Push-Location (Split-Path $PSScriptRoot -Parent)
 try {
     & cargo fmt --all -- --check
     if ($LASTEXITCODE -ne 0) { throw 'Formatting failed' }
+    & cargo clippy --locked --target $Target --all-targets -- -D warnings
+    if ($LASTEXITCODE -ne 0) { throw 'Clippy failed' }
     & cargo test --locked --target $Target --all-targets
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
     & cargo build --locked --target $Target --release
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
-    & ".\target\$Target\release\usn-eventlog.exe" verify-resources ".\target\$Target\release\usn-eventlog-provider.dll"
+    & ".\target\$Target\release\usnjmon.exe" verify-resources ".\target\$Target\release\usnjmon-provider.dll"
     if ($LASTEXITCODE -ne 0) { throw 'Message formatting failed' }
-    Write-Output "Artifacts: target\$Target\release\usn-eventlog.exe, usn-eventlog-provider.dll, usn-eventlog.man and legacy usn-eventlog-messages.dll"
+    Write-Output "Artifacts: target\$Target\release\usnjmon.exe, usnjmon-provider.dll and usnjmon.man"
 } finally { Pop-Location }

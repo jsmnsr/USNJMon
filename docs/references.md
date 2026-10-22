@@ -2,6 +2,14 @@
 
 Implementation was checked against these Microsoft references:
 
+- [EvtExportLog](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtexportlog)
+  exports an existing channel/file; it cannot synthesize events from raw USN input.
+  Offline conversion therefore writes EVTX directly, without an intermediate log.
+- [EvtQuery](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtquery)
+  and EvtRender validate generated files through the native file-query path.
+- [EvtFormatMessage](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtformatmessage)
+  requires provider metadata for ordinary event descriptions. Unregistered offline
+  files retain readable Details, but cannot promise a populated General message.
 - [FindFirstVolumeW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstvolumew),
   FindNextVolumeW and FindVolumeClose enumerate volume GUIDs (not drive-letter
   ordering). GetVolumeInformationW limits discovery to NTFS;
@@ -57,3 +65,10 @@ Implementation was checked against these Microsoft references:
   durable transaction with Event Log.
 - [Service state transitions](https://learn.microsoft.com/en-us/windows/win32/services/service-status-transitions):
   SCM control handling and reporting terminal status.
+
+The independently implemented EVTX writer follows byte-layout facts documented
+in the [libevtx EVTX format analysis](https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc)
+and Microsoft's [MS-EVEN6](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-even6/)
+Binary XML specification. It uses self-contained inline names (not template
+dependency identifiers), 64 KiB chunks and file/chunk CRCs. No third-party
+implementation or documentation text is incorporated.

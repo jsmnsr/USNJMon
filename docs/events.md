@@ -1,10 +1,16 @@
 # Native event schema 2
 
-Provider **UsnEventLog**, GUID `{4FBEAC1D-5FE8-44C1-AB4E-A06A645BF2D8}`, channel
-**UsnEventLog/Operational**. Events have descriptor version 2 and
+Provider **USNJMon**, GUID `{6427DBF2-7731-48EA-9166-4A9CF0A3B5D7}`, channel
+**USNJMon/Operational**. Events have descriptor version 2 and
 `SchemaVersion=2`. `resources/provider.man` is the native field/type/order
-contract. `usn-eventlog-provider.dll` supplies metadata and multiline messages.
+contract. `usnjmon-provider.dll` supplies metadata and multiline messages.
 Keep provider registration/resources available for archived-event rendering.
+The prior UsnEventLog GUID `{4FBEAC1D-5FE8-44C1-AB4E-A06A645BF2D8}` remains
+reserved for that legacy installation; the rename does not reinterpret its events.
+
+Offline conversion uses these record IDs/field names but serializes EventData
+scalars as strings and appends provenance fields. See [offline semantics](conversion.md)
+for unavailable identities, timestamps and the meaning of `Historical=true`.
 
 ## Event IDs
 
@@ -39,7 +45,7 @@ Rename records are not paired/invented. Unknown bits are never discarded.
 | --- | --- |
 | `SchemaVersion` | UInt32, 2 |
 | `Category` | UnicodeString, readable primary category |
-| `FileName` | UnicodeString, display name; control characters escaped |
+| `FileName` | UnicodeString, display name; controls and XML-invalid BMP characters escaped |
 | `ObjectType` | UnicodeString, File or Directory from raw attributes |
 | `OriginalTimestamp` | FILETIME, original UTC source timestamp (100 ns ticks since 1601) |
 | `Historical` | Boolean, USN below the durable live/history split |
@@ -57,7 +63,7 @@ Rename records are not paired/invented. Unknown bits are never discarded.
 | `PathStatus`, `FullPath` | UnicodeString, `parent_current_only` / current-parent GUID-path candidate, or `unresolved:<reason>` / empty |
 | `FileNameUtf16Hex` | UnicodeString, space-separated four-digit original UTF-16 units |
 | `FileNameLossy` | Boolean, display Unicode needed replacement characters |
-| `FileNameDisplayEscaped` | Boolean, display control characters were escaped |
+| `FileNameDisplayEscaped` | Boolean, display characters needed escaping |
 | `EventIdentity` | UnicodeString, volume identity + hex journal ID + decimal USN |
 
 The raw 64-bit FILETIME is preserved by the native field. Event XML renders it
@@ -122,7 +128,7 @@ after interrupted batches or manual checkpoint resets.
 
 ## Event Viewer / PowerShell queries
 
-Event Viewer: **Applications and Services Logs > UsnEventLog > Operational**.
+Event Viewer: **Applications and Services Logs > USNJMon > Operational**.
 Filter by ID in the normal filter UI. The Details XML contains fields such as
 `<Data Name="FileName">example.txt</Data>`, not a JSON insertion.
 The live and historical lanes interleave in this channel. Filter
@@ -130,15 +136,15 @@ The live and historical lanes interleave in this channel. Filter
 to see newly arrived records. An exported `.evtx` file is a static snapshot.
 
 ```powershell
-Get-WinEvent -FilterHashtable @{LogName='UsnEventLog/Operational'; Id=1001} -MaxEvents 10 |
+Get-WinEvent -FilterHashtable @{LogName='USNJMon/Operational'; Id=1001} -MaxEvents 10 |
     Format-List TimeCreated, Id, Message
 
 # Native field filter, usable in Event Viewer's XML query editor as well:
 $filter = "*[System[EventID=1001]] and *[EventData[Data[@Name='FileName']='example.txt']]"
-Get-WinEvent -LogName 'UsnEventLog/Operational' -FilterXPath $filter
+Get-WinEvent -LogName 'USNJMon/Operational' -FilterXPath $filter
 
 # Extract names without parsing JSON or depending on property positions:
-Get-WinEvent -LogName 'UsnEventLog/Operational' -MaxEvents 20 | ForEach-Object {
+Get-WinEvent -LogName 'USNJMon/Operational' -MaxEvents 20 | ForEach-Object {
     [xml]$xml = $_.ToXml()
     $fields = @{}
     foreach ($data in $xml.Event.EventData.Data) { $fields[$data.Name] = $data.InnerText }
@@ -154,7 +160,8 @@ Existing **UsnJournal / UsnJournalBridge** records remain JSON in
 provider identity**, so old IDs/messages are never reinterpreted.
 
 No historical conversion/replay is automatic. Checkpoints remain schema 1 and
-are reused across the upgrade. Correlate legacy `event_identity` with native
+can be copied during the [explicit migration](service.md#upgrading-and-migrating).
+Correlate legacy `event_identity` with native
 `EventIdentity`; raw journal identities, reason flags and timestamps are
 preserved across formats. Do not parse native `Properties[0]` as JSON: it is
 now the numeric schema version. Consumers should select provider/channel and

@@ -3,11 +3,11 @@
     xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events">
   <instrumentation>
     <events>
-      <provider name="UsnEventLog" guid="{4FBEAC1D-5FE8-44C1-AB4E-A06A645BF2D8}"
-          symbol="USN_PROVIDER" resourceFileName="usn-eventlog-provider.dll"
-          messageFileName="usn-eventlog-provider.dll">
+      <provider name="USNJMon" guid="{6427DBF2-7731-48EA-9166-4A9CF0A3B5D7}"
+          symbol="USN_PROVIDER" resourceFileName="usnjmon-provider.dll"
+          messageFileName="usnjmon-provider.dll">
         <channels>
-          <channel chid="Operational" name="UsnEventLog/Operational" value="16"
+          <channel chid="Operational" name="USNJMon/Operational" value="16"
               type="Operational" enabled="true"
               access="O:BAG:SYD:(A;;0x7;;;SY)(A;;0x7;;;BA)(A;;0x1;;;S-1-5-32-573)">
             <logging><retention>false</retention><maxSize>268435456</maxSize></logging>

@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)] [string] $BinaryDirectory,
     [string] $ConfigPath,
     [switch] $Upgrade,
+    [switch] $ProviderOnly,
     [ValidateRange(64, 4095)] [int] $MaximumSizeMB = 256
 )
 $ErrorActionPreference = 'Stop'
@@ -12,33 +13,32 @@ Set-StrictMode -Version Latest
 if ($PSEdition -ne 'Desktop') { throw 'Run this script in Windows PowerShell 5.1 (powershell.exe).' }
 if (-not [Environment]::Is64BitProcess) { throw 'Use 64-bit Windows PowerShell.' }
 
-$install = Join-Path $env:ProgramFiles 'UsnEventLog'
-$data = Join-Path $env:ProgramData 'UsnEventLog'
+$install = Join-Path $env:ProgramFiles 'USNJMon'
+$data = Join-Path $env:ProgramData 'USNJMon'
 $state = Join-Path $data 'state'
-$exe = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usn-eventlog.exe'
-$dll = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usn-eventlog-provider.dll'
-$manifest = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usn-eventlog.man'
-$legacyDll = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usn-eventlog-messages.dll'
-foreach ($artifact in @($exe, $dll, $manifest, $legacyDll)) {
+$exe = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usnjmon.exe'
+$dll = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usnjmon-provider.dll'
+$manifest = Join-Path (Resolve-Path -LiteralPath $BinaryDirectory).Path 'usnjmon.man'
+foreach ($artifact in @($exe, $dll, $manifest)) {
     if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Missing artifact: $artifact" }
 }
 if ($Upgrade) {
     if ($ConfigPath) { throw '-Upgrade preserves installed configuration; do not pass -ConfigPath.' }
     $config = Join-Path $data 'config.json'
 } else {
-    if (-not $ConfigPath) { throw '-ConfigPath is required for a fresh installation.' }
+    if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot '..\config.example.json' }
     $config = (Resolve-Path -LiteralPath $ConfigPath).Path
 }
 & $exe check-config $config
 if ($LASTEXITCODE -ne 0) { throw 'Configuration validation failed' }
 & $exe verify-resources $dll
 if ($LASTEXITCODE -ne 0) { throw 'Message resource validation failed' }
-$command = '"{0}" service "{1}" "{2}"' -f (Join-Path $install 'usn-eventlog.exe'), (Join-Path $data 'config.json'), $state
-$service = Get-CimInstance Win32_Service -Filter "Name='UsnEventLog'"
-$channelKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\UsnEventLog/Operational'
+$command = '"{0}" service "{1}" "{2}"' -f (Join-Path $install 'usnjmon.exe'), (Join-Path $data 'config.json'), $state
+$service = Get-CimInstance Win32_Service -Filter "Name='USNJMon'"
+$channelKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\USNJMon/Operational'
 $previousChannel = $null
 if (Test-Path -LiteralPath $channelKey) {
-    $channel = Get-WinEvent -ListLog 'UsnEventLog/Operational'
+    $channel = Get-WinEvent -ListLog 'USNJMon/Operational'
     try {
         $previousChannel = [pscustomobject]@{
             IsEnabled = $channel.IsEnabled
@@ -49,19 +49,19 @@ if (Test-Path -LiteralPath $channelKey) {
     } finally { $channel.Dispose() }
 }
 if ($Upgrade) {
-    if (-not $service -or $service.PathName -ne $command -or $service.State -ne 'Stopped') {
-        throw 'Upgrade requires this installation''s service to exist and be stopped.'
+    if ($service -and ($service.PathName -ne $command -or $service.State -ne 'Stopped')) {
+        throw 'Upgrade requires this installation''s service to be stopped.'
     }
     foreach ($path in @($install, $data, $state, $config)) {
         $item = Get-Item -LiteralPath $path
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse-point installation path: $path" }
     }
-    if (Get-CimInstance Win32_Process -Filter "Name='usn-eventlog.exe'" |
-        Where-Object { $_.ExecutablePath -eq (Join-Path $install 'usn-eventlog.exe') }) {
+    if (Get-CimInstance Win32_Process -Filter "Name='usnjmon.exe'" |
+        Where-Object { $_.ExecutablePath -eq (Join-Path $install 'usnjmon.exe') }) {
         throw 'Stop foreground collection before upgrading.'
     }
 } elseif ($service -or (Test-Path -LiteralPath $install) -or (Test-Path -LiteralPath $data) -or
-    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Publishers\{4fbeac1d-5fe8-44c1-ab4e-a06a645bf2d8}') -or
+    (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Publishers\{6427dbf2-7731-48ea-9166-4a9cf0a3b5d7}') -or
     $null -ne $previousChannel) {
     throw 'Application installation already exists. Stop collection and use -Upgrade, or inspect retained uninstall files.'
 }
@@ -86,7 +86,7 @@ function New-PrivateDirectory([string] $Path, [bool] $UsersRead) {
     [IO.Directory]::CreateDirectory($Path, $security) | Out-Null
 }
 
-if ($PSCmdlet.ShouldProcess('UsnEventLog', 'Install/update native provider and stopped service; preserve legacy history and checkpoints')) {
+if ($PSCmdlet.ShouldProcess('USNJMon', 'Install/update provider resources; install a stopped service unless -ProviderOnly; preserve existing history')) {
     $stateLock = $null
     try {
         if (-not $Upgrade) {
@@ -96,7 +96,7 @@ if ($PSCmdlet.ShouldProcess('UsnEventLog', 'Install/update native provider and s
             Copy-Item -LiteralPath $config -Destination (Join-Path $data 'config.json')
         }
         $stateLock = [IO.File]::Open((Join-Path $state 'collector.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
-        foreach ($name in @('usn-eventlog.exe', 'usn-eventlog-provider.dll', 'usn-eventlog.man')) {
+        foreach ($name in @('usnjmon.exe', 'usnjmon-provider.dll', 'usnjmon.man')) {
             $destination = Join-Path $install $name
             if (Test-Path -LiteralPath $destination) {
                 if ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint) {
@@ -110,14 +110,11 @@ if ($PSCmdlet.ShouldProcess('UsnEventLog', 'Install/update native provider and s
             }
             Copy-Item -LiteralPath (Join-Path $BinaryDirectory $name) -Destination $destination -Force
         }
-        if (-not $Upgrade) {
-            Copy-Item -LiteralPath $legacyDll -Destination (Join-Path $install 'usn-eventlog-messages.dll')
-        }
-        $installedDll = Join-Path $install 'usn-eventlog-provider.dll'
-        & wevtutil.exe im (Join-Path $install 'usn-eventlog.man') "/rf:$installedDll" "/mf:$installedDll"
+        $installedDll = Join-Path $install 'usnjmon-provider.dll'
+        & wevtutil.exe im (Join-Path $install 'usnjmon.man') "/rf:$installedDll" "/mf:$installedDll"
         if ($LASTEXITCODE -ne 0) { throw 'Native provider registration failed' }
         if ($null -ne $previousChannel) {
-            $updatedChannel = Get-WinEvent -ListLog 'UsnEventLog/Operational'
+            $updatedChannel = Get-WinEvent -ListLog 'USNJMon/Operational'
             try {
                 $updatedChannel.IsEnabled = $previousChannel.IsEnabled
                 $updatedChannel.LogMode = $previousChannel.LogMode
@@ -128,17 +125,23 @@ if ($PSCmdlet.ShouldProcess('UsnEventLog', 'Install/update native provider and s
                 $updatedChannel.SaveChanges()
             } finally { $updatedChannel.Dispose() }
         } else {
-            & wevtutil.exe sl 'UsnEventLog/Operational' /e:true "/ms:$($MaximumSizeMB * 1MB)"
+            & wevtutil.exe sl 'USNJMon/Operational' /e:true "/ms:$($MaximumSizeMB * 1MB)"
             if ($LASTEXITCODE -ne 0) { throw 'Native channel configuration failed' }
         }
-        if (-not $Upgrade) {
-            New-Service -Name UsnEventLog -DisplayName 'NTFS USN Event Log Bridge' -BinaryPathName $command `
+        if (-not $ProviderOnly -and -not $service) {
+            New-Service -Name USNJMon -DisplayName 'USNJMon' -BinaryPathName $command `
                 -StartupType Manual -DependsOn EventLog -Description 'Read-only retained NTFS USN journal collection with durable checkpoints.' | Out-Null
         }
-        Write-Output 'Installed but NOT started. New events go to UsnEventLog/Operational. Existing UsnJournal events and checkpoints are untouched.'
-        Write-Output 'After acceptance testing, optionally use: Set-Service UsnEventLog -StartupType Automatic'
+        if ($ProviderOnly) {
+            Write-Output 'Provider resources installed for Event Viewer descriptions. No service was created or started.'
+            Write-Output 'To add a stopped service later, rerun with -Upgrade (without -ProviderOnly).'
+        } else {
+            Write-Output 'USNJMon installed but NOT started. Start explicitly with: Start-Service USNJMon'
+            Write-Output 'For automatic startup: Set-Service USNJMon -StartupType Automatic'
+        }
+        Write-Output 'Existing UsnEventLog and UsnJournal installations, logs and checkpoints are untouched.'
     } catch {
-        Write-Error "Installation failed; partial application-owned artifacts may remain. No service was started. Inspect UsnEventLog paths and .previous backups before retrying. $($_.Exception.Message)"
+        Write-Error "Installation failed; partial application-owned artifacts may remain. No service was started. Inspect USNJMon paths and .previous backups before retrying. $($_.Exception.Message)"
         throw
     } finally {
         if ($null -ne $stateLock) { $stateLock.Dispose() }

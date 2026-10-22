@@ -1,25 +1,28 @@
-use super::volume::wide;
-use crate::config::{DiscoveredVolume, VolumeConfig, Volumes, volume_key};
+//! Native volume enumeration; these APIs have no equivalent in the standard library.
+
+use super::volume;
+use crate::config::{self, DiscoveredVolume, VolumeConfig, Volumes};
 use anyhow::{Context, Result, ensure};
-use std::{collections::HashSet, io, ptr::null_mut};
-use windows_sys::Win32::{
-    Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE},
-    Storage::FileSystem::{
-        FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumeInformationW,
-        GetVolumeNameForVolumeMountPointW, GetVolumePathNamesForVolumeNameW,
-    },
+use std::collections::HashSet;
+use std::io;
+use std::ptr;
+use windows_sys::Win32::Foundation::{ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Storage::FileSystem::{
+    FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, GetVolumeInformationW,
+    GetVolumeNameForVolumeMountPointW, GetVolumePathNamesForVolumeNameW,
 };
 
 pub fn resolve_root(root: &str) -> Result<String> {
-    let normalized = volume_key(root)?;
+    let normalized = config::volume_key(root)?;
     if normalized.starts_with(r"\\?\volume{") {
         return Ok(normalized);
     }
     let mut buffer = [0u16; 128];
     ensure!(
+        // SAFETY: Path is NUL-terminated; the output buffer has the stated WCHAR capacity.
         unsafe {
             GetVolumeNameForVolumeMountPointW(
-                wide(&normalized).as_ptr(),
+                volume::wide(&normalized).as_ptr(),
                 buffer.as_mut_ptr(),
                 buffer.len() as u32,
             )
@@ -27,7 +30,7 @@ pub fn resolve_root(root: &str) -> Result<String> {
         "resolve volume mount point {root}: {}",
         io::Error::last_os_error()
     );
-    volume_key(&terminated(&buffer)?)
+    config::volume_key(&terminated(&buffer)?)
 }
 
 fn terminated(buffer: &[u16]) -> Result<String> {
@@ -41,6 +44,7 @@ fn terminated(buffer: &[u16]) -> Result<String> {
 struct Search(HANDLE);
 impl Drop for Search {
     fn drop(&mut self) {
+        // SAFETY: Search exclusively owns a successful FindFirstVolumeW handle.
         if unsafe { FindVolumeClose(self.0) } == 0 {
             eprintln!("FindVolumeClose: {}", io::Error::last_os_error());
         }
@@ -77,6 +81,7 @@ pub fn select(config: &Volumes) -> Result<Selection> {
         unreachable!()
     };
     let mut name = [0u16; 128];
+    // SAFETY: The writable buffer has the stated WCHAR capacity.
     let handle = unsafe { FindFirstVolumeW(name.as_mut_ptr(), name.len() as u32) };
     ensure!(
         handle != INVALID_HANDLE_VALUE,
@@ -89,14 +94,15 @@ pub fn select(config: &Volumes) -> Result<Selection> {
     loop {
         let path = terminated(&name)?;
         let mut filesystem = [0u16; 32];
+        // SAFETY: The path and output buffer are live; unused optional outputs are NULL.
         let success = unsafe {
             GetVolumeInformationW(
-                wide(&path).as_ptr(),
-                null_mut(),
+                volume::wide(&path).as_ptr(),
+                ptr::null_mut(),
                 0,
-                null_mut(),
-                null_mut(),
-                null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
                 filesystem.as_mut_ptr(),
                 filesystem.len() as u32,
             )
@@ -112,9 +118,10 @@ pub fn select(config: &Volumes) -> Result<Selection> {
         } else if terminated(&filesystem)? == "NTFS" {
             let mut mounts = vec![0u16; 32768];
             let mut used = 0;
+            // SAFETY: The path is terminated and mounts/used remain valid for this call.
             let success = unsafe {
                 GetVolumePathNamesForVolumeNameW(
-                    wide(&path).as_ptr(),
+                    volume::wide(&path).as_ptr(),
                     mounts.as_mut_ptr(),
                     mounts.len() as u32,
                     &mut used,
@@ -145,6 +152,7 @@ pub fn select(config: &Volumes) -> Result<Selection> {
                 mounts: aliases,
             });
         }
+        // SAFETY: Search is live and the output buffer has the stated WCHAR capacity.
         if unsafe { FindNextVolumeW(search.0, name.as_mut_ptr(), name.len() as u32) } == 0 {
             let error = io::Error::last_os_error();
             ensure!(

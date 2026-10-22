@@ -1,8 +1,6 @@
-use crate::{
-    journal::Batch,
-    state::{Checkpoint, Store},
-    stop::Stop,
-};
+use crate::journal::Batch;
+use crate::state::{Checkpoint, Store};
+use crate::stop::Stop;
 use anyhow::{Result, ensure};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -23,6 +21,7 @@ pub struct Event {
 }
 
 impl Event {
+    #[must_use]
     pub fn new(id: u32, mut payload: Value) -> Self {
         payload["schema_version"] = json!(1);
         Self { id, payload }
@@ -60,13 +59,22 @@ pub struct Plan {
     pub notice: Option<Event>,
 }
 
+#[derive(Clone, Copy)]
+pub struct ReconcileContext {
+    pub restart: bool,
+    pub invalidated: bool,
+}
+
 pub fn reconcile(
     saved: Option<&Checkpoint>,
     volume: &str,
     journal: &Journal,
-    restart: bool,
-    invalidated: bool,
+    context: ReconcileContext,
 ) -> Result<Plan> {
+    let ReconcileContext {
+        restart,
+        invalidated,
+    } = context;
     let oldest = journal.oldest()?;
     if let Some(cp) = saved {
         cp.validate()?;
@@ -145,13 +153,24 @@ pub fn reconcile_live(
     saved: Option<&Checkpoint>,
     volume: &str,
     journal: &Journal,
-    restart: bool,
-    invalidated: bool,
+    context: ReconcileContext,
 ) -> Result<Plan> {
+    let ReconcileContext {
+        restart,
+        invalidated,
+    } = context;
     if let Some(cp) = saved {
         cp.validate_live()?;
     }
-    let mut plan = reconcile(saved, volume, journal, false, invalidated)?;
+    let mut plan = reconcile(
+        saved,
+        volume,
+        journal,
+        ReconcileContext {
+            restart: false,
+            invalidated,
+        },
+    )?;
     let same_range = saved.filter(|cp| {
         cp.volume_identity == volume
             && cp.journal_id == journal.id
@@ -167,7 +186,16 @@ pub fn reconcile_live(
     // Persist the exclusive historical boundary before the history worker starts.
     plan.checkpoint.caught_up = true;
     if plan.notice.is_none() && restart {
-        plan.notice = reconcile(saved, volume, journal, true, false)?.notice;
+        plan.notice = reconcile(
+            saved,
+            volume,
+            journal,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )?
+        .notice;
     }
     if let Some(notice) = &mut plan.notice {
         if notice.id == COVERAGE {
@@ -189,9 +217,12 @@ pub fn reconcile_history(
     live: &Checkpoint,
     volume: &str,
     journal: &Journal,
-    restart: bool,
-    invalidated: bool,
+    context: ReconcileContext,
 ) -> Result<Plan> {
+    let ReconcileContext {
+        restart,
+        invalidated,
+    } = context;
     live.validate_live()?;
     ensure!(
         live.volume_identity == volume
@@ -215,7 +246,15 @@ pub fn reconcile_history(
                 .then(|| coverage_event(COVERAGE, "history_complete", saved, volume, journal, cp)),
         }
     } else {
-        reconcile(saved, volume, journal, restart, invalidated)?
+        reconcile(
+            saved,
+            volume,
+            journal,
+            ReconcileContext {
+                restart,
+                invalidated,
+            },
+        )?
     };
     plan.checkpoint.backfill_end = live.backfill_end;
     if let Some(notice) = &mut plan.notice {
@@ -225,6 +264,7 @@ pub fn reconcile_history(
     Ok(plan)
 }
 
+#[must_use]
 pub fn historical_batch(mut batch: Batch, boundary: i64) -> Batch {
     batch.records.retain(|record| record.usn < boundary);
     batch.next_usn = batch.next_usn.min(boundary);
@@ -280,7 +320,7 @@ pub fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{fixtures, parse_batch};
+    use crate::journal::{self, fixtures};
     use anyhow::bail;
 
     #[derive(Default)]
@@ -317,9 +357,17 @@ mod tests {
         }
     }
     fn checkpoint() -> Checkpoint {
-        reconcile(None, "volume-a", &journal(), true, false)
-            .unwrap()
-            .checkpoint
+        reconcile(
+            None,
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap()
+        .checkpoint
     }
 
     #[test]
@@ -329,15 +377,32 @@ mod tests {
         let mut j = journal();
         j.lowest_valid_usn = 120;
         assert_eq!(
-            reconcile(None, "volume-a", &j, true, false)
-                .unwrap()
-                .checkpoint
-                .next_usn,
+            reconcile(
+                None,
+                "volume-a",
+                &j,
+                ReconcileContext {
+                    restart: true,
+                    invalidated: false
+                }
+            )
+            .unwrap()
+            .checkpoint
+            .next_usn,
             120
         );
         j = journal();
         j.next_usn = 300;
-        let p = reconcile(Some(&cp), "volume-a", &j, true, false).unwrap();
+        let p = reconcile(
+            Some(&cp),
+            "volume-a",
+            &j,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert_eq!(p.checkpoint.next_usn, 100);
         assert_eq!(p.checkpoint.backfill_end, 300);
         assert_eq!(p.notice.unwrap().payload["kind"], "resume");
@@ -366,8 +431,10 @@ mod tests {
                 Some(&c),
                 volume,
                 &j,
-                false,
-                kind == "read_cursor_invalidated",
+                ReconcileContext {
+                    restart: false,
+                    invalidated: kind == "read_cursor_invalidated",
+                },
             )
             .unwrap();
             assert_eq!(p.notice.as_ref().unwrap().id, GAP);
@@ -377,7 +444,7 @@ mod tests {
     }
     #[test]
     fn writes_then_checkpoints_and_replays_on_failures() {
-        let batch = parse_batch(&fixtures::batch(2, 100, 0x100, &[65]), 100).unwrap();
+        let batch = journal::parse_batch(&fixtures::batch(2, 100, 0x100, &[65]), 100).unwrap();
         let mut cp = checkpoint();
         let original = cp.clone();
         let mut sink = Memory {
@@ -433,7 +500,16 @@ mod tests {
         let cp = checkpoint();
         let mut j = journal();
         j.id = 99;
-        let plan = reconcile(Some(&cp), "volume-a", &j, false, false).unwrap();
+        let plan = reconcile(
+            Some(&cp),
+            "volume-a",
+            &j,
+            ReconcileContext {
+                restart: false,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         let mut store = Memory::default();
         let mut sink = Memory {
             fail: true,
@@ -444,7 +520,7 @@ mod tests {
     }
     #[test]
     fn cancellation_preserves_batch_for_replay() {
-        let batch = parse_batch(&fixtures::batch(2, 100, 1, &[65]), 100).unwrap();
+        let batch = journal::parse_batch(&fixtures::batch(2, 100, 1, &[65]), 100).unwrap();
         let mut cp = checkpoint();
         let stop = Stop::default();
         stop.request();
@@ -470,7 +546,7 @@ mod tests {
         let second = fixtures::batch(2, 164, 0x2000, &[66]);
         bytes[..8].copy_from_slice(&second[..8]);
         bytes.extend_from_slice(&second[8..]);
-        let batch = parse_batch(&bytes, 100).unwrap();
+        let batch = journal::parse_batch(&bytes, 100).unwrap();
         let mut cp = checkpoint();
         let mut sink = Memory {
             fail_after: Some(1),
@@ -516,7 +592,7 @@ mod tests {
         cp.caught_up = true;
         let mut sink = Memory::default();
         let mut store = Memory::default();
-        let batch = parse_batch(&164i64.to_le_bytes(), 164).unwrap();
+        let batch = journal::parse_batch(&164i64.to_le_bytes(), 164).unwrap();
         deliver(
             &mut cp,
             &batch,
@@ -536,7 +612,16 @@ mod tests {
         let mut history_store = Memory::default();
         let mut sink = Memory::default();
         let mut live = apply_plan(
-            reconcile_live(None, "volume-a", &journal(), true, false).unwrap(),
+            reconcile_live(
+                None,
+                "volume-a",
+                &journal(),
+                ReconcileContext {
+                    restart: true,
+                    invalidated: false,
+                },
+            )
+            .unwrap(),
             &mut sink,
             &mut live_store,
         )
@@ -544,13 +629,23 @@ mod tests {
         assert_eq!(live.next_usn, 164);
         assert_eq!(sink.events[0].payload["kind"], "live_start");
         let mut history = apply_plan(
-            reconcile_history(None, &live, "volume-a", &journal(), true, false).unwrap(),
+            reconcile_history(
+                None,
+                &live,
+                "volume-a",
+                &journal(),
+                ReconcileContext {
+                    restart: true,
+                    invalidated: false,
+                },
+            )
+            .unwrap(),
             &mut sink,
             &mut history_store,
         )
         .unwrap();
         assert_eq!(history.next_usn, 100);
-        let new = parse_batch(&fixtures::batch(2, 164, 0x100, &[66]), 164).unwrap();
+        let new = journal::parse_batch(&fixtures::batch(2, 164, 0x100, &[66]), 164).unwrap();
         deliver(
             &mut live,
             &new,
@@ -569,7 +664,10 @@ mod tests {
         let mut bytes = fixtures::batch(2, 100, 0x200, &[65]);
         bytes[..8].copy_from_slice(&228i64.to_le_bytes());
         bytes.extend_from_slice(&fixtures::batch(2, 164, 0x100, &[66])[8..]);
-        let old = historical_batch(parse_batch(&bytes, 100).unwrap(), live.backfill_end);
+        let old = historical_batch(
+            journal::parse_batch(&bytes, 100).unwrap(),
+            live.backfill_end,
+        );
         assert_eq!(old.records.len(), 1);
         assert_eq!(old.next_usn, 164);
         deliver(
@@ -598,8 +696,10 @@ mod tests {
             live_store.checkpoint.as_ref(),
             "volume-a",
             &current,
-            true,
-            false,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
         )
         .unwrap();
         assert_eq!(
@@ -616,8 +716,10 @@ mod tests {
             &live,
             "volume-a",
             &current,
-            true,
-            false,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
         )
         .unwrap();
         assert_eq!(resumed_history.checkpoint.next_usn, 164);
@@ -631,16 +733,33 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let plan = reconcile_live(None, "volume-a", &journal(), true, false).unwrap();
+        let plan = reconcile_live(
+            None,
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert!(apply_plan(plan, &mut sink, &mut store).is_err());
         assert!(store.checkpoint.is_none());
     }
 
     #[test]
     fn lane_gaps_preserve_split_on_wrap_and_replace_it_for_new_journal() {
-        let live = reconcile_live(None, "volume-a", &journal(), true, false)
-            .unwrap()
-            .checkpoint;
+        let live = reconcile_live(
+            None,
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap()
+        .checkpoint;
         let history = checkpoint();
         let wrapped = Journal {
             id: 1,
@@ -648,7 +767,16 @@ mod tests {
             lowest_valid_usn: 80,
             next_usn: 300,
         };
-        let next_live = reconcile_live(Some(&live), "volume-a", &wrapped, false, false).unwrap();
+        let next_live = reconcile_live(
+            Some(&live),
+            "volume-a",
+            &wrapped,
+            ReconcileContext {
+                restart: false,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert_eq!(next_live.checkpoint.next_usn, 200);
         assert_eq!(next_live.checkpoint.backfill_end, 164);
         assert_eq!(next_live.notice.unwrap().id, GAP);
@@ -657,8 +785,10 @@ mod tests {
             &next_live.checkpoint,
             "volume-a",
             &wrapped,
-            false,
-            false,
+            ReconcileContext {
+                restart: false,
+                invalidated: false,
+            },
         )
         .unwrap();
         assert_eq!(next_history.checkpoint.next_usn, 200);
@@ -666,9 +796,28 @@ mod tests {
         assert_eq!(next_history.notice.unwrap().id, GAP);
         let replaced = Journal { id: 2, ..wrapped };
         assert!(
-            reconcile_history(Some(&history), &live, "volume-a", &replaced, true, false).is_err()
+            reconcile_history(
+                Some(&history),
+                &live,
+                "volume-a",
+                &replaced,
+                ReconcileContext {
+                    restart: true,
+                    invalidated: false
+                }
+            )
+            .is_err()
         );
-        let replacement = reconcile_live(Some(&live), "volume-a", &replaced, true, false).unwrap();
+        let replacement = reconcile_live(
+            Some(&live),
+            "volume-a",
+            &replaced,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert_eq!(replacement.checkpoint.next_usn, 300);
         assert_eq!(replacement.checkpoint.backfill_end, 300);
         assert_eq!(
@@ -680,8 +829,10 @@ mod tests {
             &replacement.checkpoint,
             "volume-a",
             &replaced,
-            true,
-            false,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
         )
         .unwrap();
         assert_eq!(history.checkpoint.next_usn, 200);
@@ -690,10 +841,27 @@ mod tests {
 
     #[test]
     fn live_invalid_cursor_cannot_replay_the_historical_range() {
-        let live = reconcile_live(None, "volume-a", &journal(), true, false)
-            .unwrap()
-            .checkpoint;
-        let plan = reconcile_live(Some(&live), "volume-a", &journal(), false, true).unwrap();
+        let live = reconcile_live(
+            None,
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap()
+        .checkpoint;
+        let plan = reconcile_live(
+            Some(&live),
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: false,
+                invalidated: true,
+            },
+        )
+        .unwrap();
         assert_eq!(plan.checkpoint.next_usn, 164);
         assert_eq!(plan.checkpoint.backfill_end, 164);
         assert_eq!(
@@ -702,14 +870,33 @@ mod tests {
         );
         let mut malformed = live;
         malformed.next_usn = 100;
-        assert!(reconcile_live(Some(&malformed), "volume-a", &journal(), true, false).is_err());
+        assert!(
+            reconcile_live(
+                Some(&malformed),
+                "volume-a",
+                &journal(),
+                ReconcileContext {
+                    restart: true,
+                    invalidated: false
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn completed_history_does_not_report_false_gaps_when_old_records_wrap() {
-        let live = reconcile_live(None, "volume-a", &journal(), true, false)
-            .unwrap()
-            .checkpoint;
+        let live = reconcile_live(
+            None,
+            "volume-a",
+            &journal(),
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap()
+        .checkpoint;
         let completed = live.clone();
         let wrapped = Journal {
             id: 1,
@@ -717,12 +904,30 @@ mod tests {
             lowest_valid_usn: 80,
             next_usn: 300,
         };
-        let plan =
-            reconcile_history(Some(&completed), &live, "volume-a", &wrapped, false, false).unwrap();
+        let plan = reconcile_history(
+            Some(&completed),
+            &live,
+            "volume-a",
+            &wrapped,
+            ReconcileContext {
+                restart: false,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert_eq!(plan.checkpoint, completed);
         assert!(plan.notice.is_none());
-        let restarted =
-            reconcile_history(Some(&completed), &live, "volume-a", &wrapped, true, false).unwrap();
+        let restarted = reconcile_history(
+            Some(&completed),
+            &live,
+            "volume-a",
+            &wrapped,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap();
         assert_eq!(
             restarted.notice.unwrap().payload["kind"],
             "history_complete"
@@ -732,16 +937,26 @@ mod tests {
             first_usn: 100,
             ..wrapped
         };
-        let replacement = reconcile_live(Some(&live), "volume-a", &truncated, true, false)
-            .unwrap()
-            .checkpoint;
+        let replacement = reconcile_live(
+            Some(&live),
+            "volume-a",
+            &truncated,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
+        )
+        .unwrap()
+        .checkpoint;
         let history = reconcile_history(
             Some(&completed),
             &replacement,
             "volume-a",
             &truncated,
-            true,
-            false,
+            ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
         )
         .unwrap();
         assert_eq!(

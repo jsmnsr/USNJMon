@@ -28,6 +28,7 @@ impl Default for PathFilters {
                 r"\Windows\Temp",
                 r"\Windows\SoftwareDistribution\Download",
                 r"\ProgramData\UsnEventLog",
+                r"\ProgramData\USNJMon",
             ]
             .map(String::from)
             .to_vec(),
@@ -213,12 +214,10 @@ impl<S: Sink, R: FnMut(&Event) -> Result<ResolvedPath>> Sink for FilteringSink<'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        engine::Journal,
-        journal::{fixtures, parse_batch},
-        state::{Checkpoint, Store},
-        stop::Stop,
-    };
+    use crate::engine::Journal;
+    use crate::journal::{self, fixtures};
+    use crate::state::{Checkpoint, Store};
+    use crate::stop::Stop;
     use std::time::Duration;
 
     #[derive(Default)]
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn filtered_batches_advance_only_after_summary_and_accepted_writes() {
-        let batch = parse_batch(&fixtures::batch(2, 100, 0x100, &[65]), 100).unwrap();
+        let batch = journal::parse_batch(&fixtures::batch(2, 100, 0x100, &[65]), 100).unwrap();
         let initial = engine::reconcile(
             None,
             "fixture",
@@ -253,8 +252,10 @@ mod tests {
                 lowest_valid_usn: 0,
                 next_usn: 164,
             },
-            true,
-            false,
+            engine::ReconcileContext {
+                restart: true,
+                invalidated: false,
+            },
         )
         .unwrap()
         .checkpoint;
@@ -361,6 +362,7 @@ mod tests {
             r"\Windows\Logs\CBS\CBS.log",
             r"\WINDOWS\TEMP\file",
             r"\ProgramData\UsnEventLog\state\system.json",
+            r"\ProgramData\USNJMon\state\system.json",
         ] {
             assert_eq!(policy.decide(Some(path)).unwrap(), Decision::Blacklisted);
         }
