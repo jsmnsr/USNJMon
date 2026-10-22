@@ -32,7 +32,7 @@ pub const PROVIDER: &str = "USNJMon";
 pub const PROVIDER_GUID: &str = "{6427DBF2-7731-48EA-9166-4A9CF0A3B5D7}";
 pub const LOG: &str = "USNJMon/Operational";
 const PROVIDER_KEY: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Publishers\{6427dbf2-7731-48ea-9166-4a9cf0a3b5d7}";
-const PROVIDER_ID: GUID = GUID {
+pub(crate) const PROVIDER_ID: GUID = GUID {
     data1: 0x6427dbf2,
     data2: 0x7731,
     data3: 0x48ea,

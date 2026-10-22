@@ -65,10 +65,10 @@ USNJMon never resolves its paths against the analysis computer.
 | System `Computer` | `offline-conversion`, not the source computer |
 
 All original name units, reason bits, references, attributes, record versions,
-USNs and timestamps are preserved. Offline EventData scalar values are serialized
-as strings; unlike service ETW fields, their native property types are not
-numeric/FILETIME. Use named XML fields and parse values as documented in the
-[schema](events.md), rather than depending on `Properties[n]` types.
+USNs and timestamps are preserved. Offline events use typed Binary XML template
+substitutions matching the service's scalar/FILETIME types; `InputOffset` is
+UInt64. Use named XML fields as documented in the [schema](events.md) rather
+than depending on positional properties.
 
 Deduplication identities are stable for the **same input bytes**. Extracting the
 same records with different padding changes the input hash, so identities do

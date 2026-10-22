@@ -69,6 +69,6 @@ Implementation was checked against these Microsoft references:
 The independently implemented EVTX writer follows byte-layout facts documented
 in the [libevtx EVTX format analysis](https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc)
 and Microsoft's [MS-EVEN6](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-even6/)
-Binary XML specification. It uses self-contained inline names (not template
-dependency identifiers), 64 KiB chunks and file/chunk CRCs. No third-party
+Binary XML specification. It uses typed template substitutions, explicit
+name/template hash tables, 64 KiB chunks and file/chunk CRCs. No third-party
 implementation or documentation text is incorporated.

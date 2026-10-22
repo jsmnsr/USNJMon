@@ -1,9 +1,8 @@
-//! Offline conversion. Win32 is used only for FILETIME formatting and no-replace publication.
-//! FFI is necessary because std has no FILETIME formatter or Windows no-replace rename.
+//! Offline conversion. Win32 supplies no-replace publication, which std::fs::rename cannot provide.
 
 use super::event_log;
 use crate::engine::Event;
-use crate::evtx::{Element, EvtxWriter};
+use crate::evtx::{Element, EvtxWriter, Value};
 use crate::schema;
 use crate::schema::Data;
 use crate::stop::Stop;
@@ -17,11 +16,9 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use windows_sys::Win32::Foundation::{FILETIME, SYSTEMTIME};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_SHARE_READ, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
-use windows_sys::Win32::System::Time::FileTimeToSystemTime;
 
 pub struct Conversion {
     pub records: u64,
@@ -145,32 +142,7 @@ fn conversion_time() -> Result<u64> {
     Ok(ticks.try_into()?)
 }
 
-fn utc(ticks: u64) -> Result<String> {
-    let filetime = FILETIME {
-        dwLowDateTime: ticks as u32,
-        dwHighDateTime: (ticks >> 32) as u32,
-    };
-    // SAFETY: SYSTEMTIME is a C integer-only struct whose zero representation is valid.
-    let mut time: SYSTEMTIME = unsafe { std::mem::zeroed() };
-    ensure!(
-        // SAFETY: Both pointers reference properly aligned structures valid for this call.
-        unsafe { FileTimeToSystemTime(&filetime, &mut time) } != 0,
-        "invalid FILETIME {ticks}: {}",
-        std::io::Error::last_os_error()
-    );
-    Ok(format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:07}Z",
-        time.wYear,
-        time.wMonth,
-        time.wDay,
-        time.wHour,
-        time.wMinute,
-        time.wSecond,
-        ticks % 10_000_000
-    ))
-}
-
-fn field<'text>(name: &'text str, value: String) -> Element<'text> {
+fn field<'text>(name: &'text str, value: Value) -> Element<'text> {
     let mut element = Element::new(name);
     element.text = Some(value);
     element
@@ -193,24 +165,29 @@ fn document(
     provider
         .attributes
         .push(("Name", event_log::PROVIDER.into()));
-    provider
-        .attributes
-        .push(("Guid", event_log::PROVIDER_GUID.into()));
+    let guid = event_log::PROVIDER_ID;
+    let mut guid_bytes = [0; 16];
+    guid_bytes[..4].copy_from_slice(&guid.data1.to_le_bytes());
+    guid_bytes[4..6].copy_from_slice(&guid.data2.to_le_bytes());
+    guid_bytes[6..8].copy_from_slice(&guid.data3.to_le_bytes());
+    guid_bytes[8..].copy_from_slice(&guid.data4);
+    provider.attributes.push(("Guid", Value::Guid(guid_bytes)));
     system.children.push(provider);
     for (name, value) in [
-        ("EventID", event.id.to_string()),
-        ("Version", "2".into()),
-        ("Level", "4".into()),
-        ("Task", "0".into()),
-        ("Opcode", "0".into()),
-        ("Keywords", "0x1".into()),
+        ("EventID", Value::U16(event.id.try_into()?)),
+        ("Version", Value::U8(schema::VERSION)),
+        ("Level", Value::U8(4)),
+        ("Task", Value::U16(0)),
+        ("Opcode", Value::U8(0)),
+        ("Keywords", Value::Hex64(1)),
     ] {
         system.children.push(field(name, value));
     }
     let mut time = Element::new("TimeCreated");
-    time.attributes.push(("SystemTime", utc(timestamp)?));
+    time.attributes
+        .push(("SystemTime", Value::Filetime(timestamp)));
     system.children.push(time);
-    system.children.push(field("EventRecordID", id.to_string()));
+    system.children.push(field("EventRecordID", Value::U64(id)));
     system
         .children
         .push(field("Channel", event_log::LOG.into()));
@@ -221,13 +198,13 @@ fn document(
     let mut data = Element::new("EventData");
     for item in schema::fields(event)? {
         let value = match item.value {
-            Data::Text(value) => value,
-            Data::U16(value) => value.to_string(),
-            Data::U32(value) => value.to_string(),
-            Data::U64(value) => value.to_string(),
-            Data::I64(value) => value.to_string(),
-            Data::Boolean(value) => value.to_string(),
-            Data::Filetime(value) => utc(value)?,
+            Data::Text(value) => Value::Text(value),
+            Data::U16(value) => Value::U16(value),
+            Data::U32(value) => Value::U32(value),
+            Data::U64(value) => Value::U64(value),
+            Data::I64(value) => Value::I64(value),
+            Data::Boolean(value) => Value::Boolean(value),
+            Data::Filetime(value) => Value::Filetime(value),
         };
         let mut element = field("Data", value);
         element.attributes.push(("Name", item.name.into()));
@@ -236,7 +213,7 @@ fn document(
     for (name, value) in [
         ("SourceKind", "extracted_usn_stream".into()),
         ("InputSha256", digest.into()),
-        ("InputOffset", offset.to_string()),
+        ("InputOffset", Value::U64(offset)),
         ("JournalIdentityStatus", "not_present_in_input".into()),
     ] {
         let mut element = field("Data", value);
@@ -300,7 +277,9 @@ mod tests {
                 if error.raw_os_error() == Some(259) {
                     break;
                 }
-                return Err(error).context("read generated EVTX");
+                return Err(error).with_context(|| {
+                    format!("read generated EVTX after {} records", documents.len())
+                });
             }
             let event = EventHandle(event);
             let mut used = 0;
@@ -397,7 +376,7 @@ mod tests {
             assert_eq!(field("Usn"), (65536 + index * 1024).to_string());
             assert_eq!(field("JournalIdentityStatus"), "not_present_in_input");
             assert_eq!(field("InputSha256"), result.input_sha256);
-            assert!(field("OriginalTimestamp").ends_with('Z'));
+            assert_eq!(field("OriginalTimestamp"), "2022-06-18T04:26:40.0000000Z");
             assert_eq!(field("Historical"), "true");
             assert_eq!(field("ReasonFlags"), "2147483904");
             let time = document

@@ -8,8 +8,8 @@ Keep provider registration/resources available for archived-event rendering.
 The prior UsnEventLog GUID `{4FBEAC1D-5FE8-44C1-AB4E-A06A645BF2D8}` remains
 reserved for that legacy installation; the rename does not reinterpret its events.
 
-Offline conversion uses these record IDs/field names but serializes EventData
-scalars as strings and appends provenance fields. See [offline semantics](conversion.md)
+Offline conversion uses these record IDs, field names and native scalar types,
+then appends provenance fields. See [offline semantics](conversion.md)
 for unavailable identities, timestamps and the meaning of `Historical=true`.
 
 ## Event IDs
