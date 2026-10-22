@@ -1,0 +1,39 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      RUSTFLAGS: -D warnings
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc, x86_64-pc-windows-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --target ${{ matrix.target }}
+          rustup override set 1.99.1
+      - name: Format, test and build (no registration or volume access)
+        shell: pwsh
+        run: |
+          if ('${{ matrix.target }}' -eq 'x86_64-pc-windows-gnu') {
+            $env:PATH = "C:\mingw64\bin;$env:PATH"
+          }
+          .\scripts\Build.ps1 -Target '${{ matrix.target }}'
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts\*.ps1 | ForEach-Object {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
+            if ($errors) { throw ($errors | Out-String) }
+          }

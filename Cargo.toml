@@ -1,0 +1,36 @@
+[package]
+name = "usn-eventlog"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Read-only NTFS USN journal to Windows Event Log service"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_Etw",
+    "Win32_System_EventLog",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+roxmltree = "0.21"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "debuginfo"

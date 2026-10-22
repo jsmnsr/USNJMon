@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="utf-8"?>
+<instrumentationManifest xmlns="http://schemas.microsoft.com/win/2004/08/events"
+    xmlns:win="http://manifests.microsoft.com/win/2004/08/windows/events">
+  <instrumentation>
+    <events>
+      <provider name="UsnEventLog" guid="{4FBEAC1D-5FE8-44C1-AB4E-A06A645BF2D8}"
+          symbol="USN_PROVIDER" resourceFileName="usn-eventlog-provider.dll"
+          messageFileName="usn-eventlog-provider.dll">
+        <channels>
+          <channel chid="Operational" name="UsnEventLog/Operational" value="16"
+              type="Operational" enabled="true"
+              access="O:BAG:SYD:(A;;0x7;;;SY)(A;;0x7;;;BA)(A;;0x1;;;S-1-5-32-573)">
+            <logging><retention>false</retention><maxSize>268435456</maxSize></logging>
+          </channel>
+        </channels>
+        <keywords>
+          <keyword name="Journal" mask="0x1"/>
+          <keyword name="Collector" mask="0x2"/>
+        </keywords>
+        <templates>
+          <template tid="Record">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="Category" inType="win:UnicodeString"/>
+            <data name="FileName" inType="win:UnicodeString"/>
+            <data name="ObjectType" inType="win:UnicodeString"/>
+            <data name="OriginalTimestamp" inType="win:FILETIME"/>
+            <data name="Historical" inType="win:Boolean"/>
+            <data name="Reasons" inType="win:UnicodeString"/>
+            <data name="ReasonFlags" inType="win:UInt32" outType="win:HexInt32"/>
+            <data name="UnknownReasonBits" inType="win:UInt32" outType="win:HexInt32"/>
+            <data name="Usn" inType="win:Int64"/>
+            <data name="JournalId" inType="win:UInt64" outType="win:HexInt64"/>
+            <data name="VolumeIdentity" inType="win:UnicodeString"/>
+            <data name="FileReference" inType="win:UnicodeString"/>
+            <data name="ParentReference" inType="win:UnicodeString"/>
+            <data name="FileAttributes" inType="win:UInt32" outType="win:HexInt32"/>
+            <data name="SourceInfo" inType="win:UInt32" outType="win:HexInt32"/>
+            <data name="SecurityId" inType="win:UInt32"/>
+            <data name="MajorVersion" inType="win:UInt16"/>
+            <data name="MinorVersion" inType="win:UInt16"/>
+            <data name="RecordLength" inType="win:UInt32"/>
+            <data name="BackfillEnd" inType="win:Int64"/>
+            <data name="PathStatus" inType="win:UnicodeString"/>
+            <data name="FullPath" inType="win:UnicodeString"/>
+            <data name="FileNameUtf16Hex" inType="win:UnicodeString"/>
+            <data name="FileNameLossy" inType="win:Boolean"/>
+            <data name="FileNameDisplayEscaped" inType="win:Boolean"/>
+            <data name="EventIdentity" inType="win:UnicodeString"/>
+          </template>
+          <template tid="Coverage">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="Kind" inType="win:UnicodeString"/>
+            <data name="VolumeIdentity" inType="win:UnicodeString"/>
+            <data name="JournalId" inType="win:UInt64" outType="win:HexInt64"/>
+            <data name="FirstUsn" inType="win:Int64"/>
+            <data name="LowestValidUsn" inType="win:Int64"/>
+            <data name="NextUsn" inType="win:Int64"/>
+            <data name="ResumeUsn" inType="win:Int64"/>
+            <data name="BackfillEnd" inType="win:Int64"/>
+            <data name="HasPreviousCheckpoint" inType="win:Boolean"/>
+            <data name="PreviousVolumeIdentity" inType="win:UnicodeString"/>
+            <data name="PreviousJournalId" inType="win:UInt64" outType="win:HexInt64"/>
+            <data name="PreviousNextUsn" inType="win:Int64"/>
+            <data name="Coverage" inType="win:UnicodeString"/>
+            <data name="LostRecordCount" inType="win:UnicodeString"/>
+          </template>
+          <template tid="CaughtUp">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="VolumeIdentity" inType="win:UnicodeString"/>
+            <data name="JournalId" inType="win:UInt64" outType="win:HexInt64"/>
+            <data name="BackfillEnd" inType="win:Int64"/>
+            <data name="NextUsn" inType="win:Int64"/>
+          </template>
+          <template tid="Health">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="VolumeName" inType="win:UnicodeString"/>
+            <data name="ConfiguredPath" inType="win:UnicodeString"/>
+            <data name="Error" inType="win:UnicodeString"/>
+            <data name="RetryIntervalMs" inType="win:UInt64"/>
+            <data name="HasCheckpoint" inType="win:Boolean"/>
+            <data name="VolumeIdentity" inType="win:UnicodeString"/>
+            <data name="JournalId" inType="win:UInt64" outType="win:HexInt64"/>
+            <data name="NextUsn" inType="win:Int64"/>
+          </template>
+          <template tid="Fatal">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="Error" inType="win:UnicodeString"/>
+          </template>
+          <template tid="Lifecycle">
+            <data name="SchemaVersion" inType="win:UInt32"/>
+            <data name="State" inType="win:UnicodeString"/>
+            <data name="VolumeCount" inType="win:UInt32"/>
+          </template>
+        </templates>
+        <events>
+          <event value="1000" version="2" symbol="RecordCreated" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1001" version="2" symbol="RecordDeleted" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1002" version="2" symbol="RecordRenameOld" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1003" version="2" symbol="RecordRenameNew" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1010" version="2" symbol="RecordData" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1020" version="2" symbol="RecordSecurity" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1030" version="2" symbol="RecordMetadata" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="1099" version="2" symbol="RecordOther" channel="Operational" level="win:Informational" keywords="Journal" template="Record" message="$(string.Record)"/>
+          <event value="101" version="2" symbol="Coverage" channel="Operational" level="win:Informational" keywords="Collector" template="Coverage" message="$(string.Coverage)"/>
+          <event value="102" version="2" symbol="Gap" channel="Operational" level="win:Warning" keywords="Collector" template="Coverage" message="$(string.Gap)"/>
+          <event value="103" version="2" symbol="CaughtUp" channel="Operational" level="win:Informational" keywords="Collector" template="CaughtUp" message="$(string.CaughtUp)"/>
+          <event value="104" version="2" symbol="Health" channel="Operational" level="win:Warning" keywords="Collector" template="Health" message="$(string.Health)"/>
+          <event value="105" version="2" symbol="Fatal" channel="Operational" level="win:Error" keywords="Collector" template="Fatal" message="$(string.Fatal)"/>
+          <event value="106" version="2" symbol="Lifecycle" channel="Operational" level="win:Informational" keywords="Collector" template="Lifecycle" message="$(string.Lifecycle)"/>
+        </events>
+      </provider>
+    </events>
+  </instrumentation>
+  <localization>
+    <resources culture="en-US">
+      <stringTable>
+        <string id="Record" value="%2%n%nFile name: %3%nObject: %4%nOriginal time (UTC): %5%nHistorical backfill: %6%nReasons: %7%nRaw reason flags: %8%nUnknown reason bits: %9%n%nVolume: %12%nUSN: %10%nJournal ID: %11%nFile reference: %13%nParent reference: %14%nPath status: %22%nFull path: %23%n%nAttributes: %15%nSource flags: %16%nSecurity metadata ID (not actor): %17%nRecord version: %18.%19%nRecord bytes: %20%nBackfill boundary: %21%nFilename lossy: %25%nDisplay controls escaped: %26%nOriginal UTF-16 units (hex): %24%nEvent identity: %27%nSchema: %1"/>
+        <string id="Coverage" value="Retained journal coverage: %2%n%nVolume: %3%nJournal ID: %4%nFirst retained USN: %5%nLowest valid USN: %6%nNext journal USN: %7%nResume USN: %8%nBackfill boundary: %9%nPrevious checkpoint present: %10%nPrevious volume: %11%nPrevious journal: %12%nPrevious cursor: %13%nCoverage: %14%nMissing records: %15%nSchema: %1"/>
+        <string id="Gap" value="Journal continuity gap: %2%n%nSome history may be unavailable. No expired records can be recovered.%nVolume: %3%nJournal ID: %4%nFirst retained USN: %5%nLowest valid USN: %6%nNext journal USN: %7%nResume USN: %8%nBackfill boundary: %9%nPrevious checkpoint present: %10%nPrevious volume: %11%nPrevious journal: %12%nPrevious cursor: %13%nCoverage: %14%nMissing records: %15%nSchema: %1"/>
+        <string id="CaughtUp" value="Historical backfill boundary reached.%n%nVolume: %2%nJournal ID: %3%nBackfill boundary: %4%nNext cursor: %5%nSchema: %1"/>
+        <string id="Health" value="Volume read failed; retrying without advancing its checkpoint.%n%nVolume name: %2%nConfigured path: %3%nError: %4%nRetry delay (ms): %5%nCheckpoint present: %6%nVolume identity: %7%nJournal ID: %8%nNext cursor: %9%nSchema: %1"/>
+        <string id="Fatal" value="Collector stopped because of a fatal failure.%n%nError: %2%nRestart may replay accepted events from the uncommitted batch.%nSchema: %1"/>
+        <string id="Lifecycle" value="Collector %2.%n%nConfigured volumes: %3%nSchema: %1"/>
+      </stringTable>
+    </resources>
+  </localization>
+</instrumentationManifest>
