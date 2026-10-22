@@ -1,7 +1,19 @@
 {
-  "volumes": [
-    { "name": "system", "path": "C:\\" }
-  ],
+  "volumes": {
+    "include": [],
+    "exclude": []
+  },
+  "path_filters": {
+    "whitelist": [],
+    "blacklist": [
+      "\\Windows\\Logs",
+      "\\Windows\\Temp",
+      "\\Windows\\SoftwareDistribution\\Download",
+      "\\ProgramData\\UsnEventLog",
+      "\\ProgramData\\USNJMon"
+    ],
+    "unresolved": "include"
+  },
   "poll_interval_ms": 200,
   "event_interval_ms": 2,
   "retry_interval_ms": 10000

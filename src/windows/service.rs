@@ -1,25 +1,23 @@
+//! SCM hosting and process-lifetime console cancellation, unavailable in std.
+
 use crate::stop::Stop;
 use anyhow::{Context, Result};
-use std::{
-    ffi::OsString,
-    path::PathBuf,
-    sync::{Arc, Mutex, OnceLock},
-    time::Duration,
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+use windows_service::service::{
+    ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };
-use windows_service::{
-    define_windows_service,
-    service::{
-        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
-        ServiceType,
-    },
-    service_control_handler::{self, ServiceControlHandlerResult, ServiceStatusHandle},
-    service_dispatcher,
+use windows_service::service_control_handler::{
+    self, ServiceControlHandlerResult, ServiceStatusHandle,
 };
+use windows_service::{define_windows_service, service_dispatcher};
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_SHUTDOWN_EVENT, SetConsoleCtrlHandler,
 };
 
-pub const SERVICE: &str = "UsnEventLog";
+pub const SERVICE: &str = "USNJMon";
 static PATHS: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
 static CONSOLE_STOP: OnceLock<Stop> = OnceLock::new();
 
@@ -86,7 +84,7 @@ fn run_service() -> Result<()> {
     let shared: Arc<Mutex<Option<ServiceStatusHandle>>> = Arc::new(Mutex::new(None));
     let handler_status = shared.clone();
     let handle = service_control_handler::register(SERVICE, move |event| {
-        let locked = handler_status.lock().unwrap();
+        let locked = handler_status.lock().expect("SCM status lock poisoned");
         let result = control(event, &handler_stop);
         if handler_stop.requested() {
             if let Some(handle) = &*locked {
@@ -104,15 +102,15 @@ fn run_service() -> Result<()> {
         ServiceState::StartPending,
         ServiceExitCode::Win32(0),
     ))?;
-    *shared.lock().unwrap() = Some(handle);
+    *shared.lock().expect("SCM status lock poisoned") = Some(handle);
     let ready_stop = stop.clone();
     let result = match PATHS.get() {
-        Some((config, state)) => super::run(config, state, stop, || {
-            let locked = shared.lock().unwrap();
+        Some((config, state)) => super::collector::run(config, state, stop, || {
+            let locked = shared.lock().expect("SCM status lock poisoned");
             if !ready_stop.requested() {
                 locked
                     .as_ref()
-                    .unwrap()
+                    .expect("SCM status handle registered before collector startup")
                     .set_service_status(status(ServiceState::Running, ServiceExitCode::Win32(0)))?;
             }
             Ok(())
@@ -124,10 +122,10 @@ fn run_service() -> Result<()> {
     } else {
         ServiceExitCode::ServiceSpecific(1)
     };
-    let mut locked = shared.lock().unwrap();
+    let mut locked = shared.lock().expect("SCM status lock poisoned");
     locked
         .take()
-        .unwrap()
+        .expect("SCM status handle retained until shutdown")
         .set_service_status(status(ServiceState::Stopped, code))?;
     result
 }
@@ -146,15 +144,21 @@ unsafe extern "system" fn console_control(code: u32) -> i32 {
 }
 
 pub fn foreground(config: PathBuf, state: PathBuf) -> Result<()> {
+    let stop = console_stop()?;
+    super::collector::run(&config, &state, stop, || Ok(()))
+}
+
+pub fn console_stop() -> Result<Stop> {
     let stop = Stop::default();
     CONSOLE_STOP
         .set(stop.clone())
         .map_err(|_| anyhow::anyhow!("console handler already initialized"))?;
+    // SAFETY: Handler has the required ABI and accesses only process-lifetime synchronized state.
     if unsafe { SetConsoleCtrlHandler(Some(console_control), 1) } == 0 {
         return Err(std::io::Error::last_os_error())
             .context("register console cancellation handler");
     }
-    super::run(&config, &state, stop, || Ok(()))
+    Ok(stop)
 }
 
 #[cfg(test)]

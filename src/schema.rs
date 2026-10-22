@@ -5,6 +5,7 @@ use serde_json::Value;
 pub const VERSION: u8 = 2;
 pub const RECORD_IDS: [u32; 8] = [1000, 1001, 1002, 1003, 1010, 1020, 1030, 1099];
 
+#[must_use]
 pub fn category(reason: u32) -> (u32, &'static str) {
     for (mask, id, name) in [
         (0x200, 1001, "File/directory deleted"),
@@ -34,6 +35,7 @@ pub enum Data {
 }
 
 impl Data {
+    #[must_use]
     pub fn input_type(&self) -> &'static str {
         match self {
             Self::Text(_) => "win:UnicodeString",
@@ -67,7 +69,16 @@ impl Data {
     }
 }
 
-pub struct Field(pub &'static str, pub Data);
+pub struct Field {
+    pub name: &'static str,
+    pub value: Data,
+}
+
+impl Field {
+    fn new(name: &'static str, value: Data) -> Self {
+        Self { name, value }
+    }
+}
 
 fn text(value: &Value, key: &str) -> Result<Data> {
     Ok(Data::Text(
@@ -120,9 +131,9 @@ fn checkpoint_fields(value: &Value) -> Result<(Data, Data, Data)> {
 }
 
 pub fn fields(event: &Event) -> Result<Vec<Field>> {
-    use Data::*;
+    use Data::{Boolean, Filetime, Text, U32, U64};
     let p = &event.payload;
-    let mut fields = vec![Field("SchemaVersion", U32(VERSION.into()))];
+    let mut fields = vec![Field::new("SchemaVersion", U32(VERSION.into()))];
     if RECORD_IDS.contains(&event.id) {
         let r = p.get("record").context("missing record")?;
         let raw = u64_field(r, "reason")?.try_into()?;
@@ -135,7 +146,7 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
         let display: String = name
             .chars()
             .map(|c| {
-                if c.is_control() {
+                if c.is_control() || matches!(c, '\u{fffe}' | '\u{ffff}') {
                     c.escape_default().to_string()
                 } else {
                     c.to_string()
@@ -168,9 +179,9 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
             _ => bail!("invalid full_path"),
         };
         fields.extend([
-            Field("Category", Text(category.into())),
-            Field("FileName", Text(display.clone())),
-            Field(
+            Field::new("Category", Text(category.into())),
+            Field::new("FileName", Text(display.clone())),
+            Field::new(
                 "ObjectType",
                 Text(
                     if attributes & 0x10 != 0 {
@@ -181,32 +192,32 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
                     .into(),
                 ),
             ),
-            Field(
+            Field::new(
                 "OriginalTimestamp",
                 Filetime(u64_field(r, "timestamp_filetime")?),
             ),
-            Field("Historical", bool_field(p, "historical")?),
-            Field("Reasons", Text(reasons)),
-            Field("ReasonFlags", U32(raw)),
-            Field("UnknownReasonBits", u32_field(r, "unknown_reason_bits")?),
-            Field("Usn", i64_field(r, "usn")?),
-            Field("JournalId", U64(u64_field(p, "journal_id")?)),
-            Field("VolumeIdentity", text(p, "volume_identity")?),
-            Field("FileReference", text(r, "file_reference")?),
-            Field("ParentReference", text(r, "parent_reference")?),
-            Field("FileAttributes", U32(attributes)),
-            Field("SourceInfo", u32_field(r, "source_info")?),
-            Field("SecurityId", u32_field(r, "security_id")?),
-            Field("MajorVersion", u16_field(r, "major_version")?),
-            Field("MinorVersion", u16_field(r, "minor_version")?),
-            Field("RecordLength", u32_field(r, "record_length")?),
-            Field("BackfillEnd", i64_field(p, "backfill_end")?),
-            Field("PathStatus", text(p, "path_status")?),
-            Field("FullPath", full_path),
-            Field("FileNameUtf16Hex", Text(units)),
-            Field("FileNameLossy", bool_field(r, "filename_lossy")?),
-            Field("FileNameDisplayEscaped", Boolean(display != name)),
-            Field("EventIdentity", text(p, "event_identity")?),
+            Field::new("Historical", bool_field(p, "historical")?),
+            Field::new("Reasons", Text(reasons)),
+            Field::new("ReasonFlags", U32(raw)),
+            Field::new("UnknownReasonBits", u32_field(r, "unknown_reason_bits")?),
+            Field::new("Usn", i64_field(r, "usn")?),
+            Field::new("JournalId", U64(u64_field(p, "journal_id")?)),
+            Field::new("VolumeIdentity", text(p, "volume_identity")?),
+            Field::new("FileReference", text(r, "file_reference")?),
+            Field::new("ParentReference", text(r, "parent_reference")?),
+            Field::new("FileAttributes", U32(attributes)),
+            Field::new("SourceInfo", u32_field(r, "source_info")?),
+            Field::new("SecurityId", u32_field(r, "security_id")?),
+            Field::new("MajorVersion", u16_field(r, "major_version")?),
+            Field::new("MinorVersion", u16_field(r, "minor_version")?),
+            Field::new("RecordLength", u32_field(r, "record_length")?),
+            Field::new("BackfillEnd", i64_field(p, "backfill_end")?),
+            Field::new("PathStatus", text(p, "path_status")?),
+            Field::new("FullPath", full_path),
+            Field::new("FileNameUtf16Hex", Text(units)),
+            Field::new("FileNameLossy", bool_field(r, "filename_lossy")?),
+            Field::new("FileNameDisplayEscaped", Boolean(display != name)),
+            Field::new("EventIdentity", text(p, "event_identity")?),
         ]);
     } else {
         match event.id {
@@ -217,46 +228,63 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
                     .context("missing previous checkpoint")?;
                 let (volume, journal, next) = checkpoint_fields(previous)?;
                 fields.extend([
-                    Field("Kind", text(p, "kind")?),
-                    Field("VolumeIdentity", text(p, "volume_identity")?),
-                    Field("JournalId", U64(u64_field(j, "id")?)),
-                    Field("FirstUsn", i64_field(j, "first_usn")?),
-                    Field("LowestValidUsn", i64_field(j, "lowest_valid_usn")?),
-                    Field("NextUsn", i64_field(j, "next_usn")?),
-                    Field("ResumeUsn", i64_field(p, "resume_usn")?),
-                    Field("BackfillEnd", i64_field(p, "backfill_end")?),
-                    Field("HasPreviousCheckpoint", Boolean(!previous.is_null())),
-                    Field("PreviousVolumeIdentity", volume),
-                    Field("PreviousJournalId", journal),
-                    Field("PreviousNextUsn", next),
-                    Field("Coverage", text(p, "coverage")?),
-                    Field("LostRecordCount", Text("unknown".into())),
+                    Field::new("Kind", text(p, "kind")?),
+                    Field::new("VolumeIdentity", text(p, "volume_identity")?),
+                    Field::new("JournalId", U64(u64_field(j, "id")?)),
+                    Field::new("FirstUsn", i64_field(j, "first_usn")?),
+                    Field::new("LowestValidUsn", i64_field(j, "lowest_valid_usn")?),
+                    Field::new("NextUsn", i64_field(j, "next_usn")?),
+                    Field::new("ResumeUsn", i64_field(p, "resume_usn")?),
+                    Field::new("BackfillEnd", i64_field(p, "backfill_end")?),
+                    Field::new("HasPreviousCheckpoint", Boolean(!previous.is_null())),
+                    Field::new("PreviousVolumeIdentity", volume),
+                    Field::new("PreviousJournalId", journal),
+                    Field::new("PreviousNextUsn", next),
+                    Field::new("Coverage", text(p, "coverage")?),
+                    Field::new("LostRecordCount", Text("unknown".into())),
                 ]);
             }
             engine::CAUGHT_UP => fields.extend([
-                Field("VolumeIdentity", text(p, "volume_identity")?),
-                Field("JournalId", U64(u64_field(p, "journal_id")?)),
-                Field("BackfillEnd", i64_field(p, "backfill_end")?),
-                Field("NextUsn", i64_field(p, "next_usn")?),
+                Field::new("VolumeIdentity", text(p, "volume_identity")?),
+                Field::new("JournalId", U64(u64_field(p, "journal_id")?)),
+                Field::new("BackfillEnd", i64_field(p, "backfill_end")?),
+                Field::new("NextUsn", i64_field(p, "next_usn")?),
             ]),
             engine::HEALTH => {
                 let checkpoint = p.get("checkpoint").context("missing checkpoint")?;
                 let (volume, journal, next) = checkpoint_fields(checkpoint)?;
                 fields.extend([
-                    Field("VolumeName", text(p, "volume_name")?),
-                    Field("ConfiguredPath", text(p, "configured_path")?),
-                    Field("Error", text(p, "error")?),
-                    Field("RetryIntervalMs", U64(u64_field(p, "retry_interval_ms")?)),
-                    Field("HasCheckpoint", Boolean(!checkpoint.is_null())),
-                    Field("VolumeIdentity", volume),
-                    Field("JournalId", journal),
-                    Field("NextUsn", next),
+                    Field::new("VolumeName", text(p, "volume_name")?),
+                    Field::new("ConfiguredPath", text(p, "configured_path")?),
+                    Field::new("Error", text(p, "error")?),
+                    Field::new("RetryIntervalMs", U64(u64_field(p, "retry_interval_ms")?)),
+                    Field::new("HasCheckpoint", Boolean(!checkpoint.is_null())),
+                    Field::new("VolumeIdentity", volume),
+                    Field::new("JournalId", journal),
+                    Field::new("NextUsn", next),
                 ]);
             }
-            engine::FATAL => fields.push(Field("Error", text(p, "error")?)),
+            engine::FATAL => fields.push(Field::new("Error", text(p, "error")?)),
             engine::LIFECYCLE => fields.extend([
-                Field("State", text(p, "state")?),
-                Field("VolumeCount", u32_field(p, "volume_count")?),
+                Field::new("State", text(p, "state")?),
+                Field::new("VolumeCount", u32_field(p, "volume_count")?),
+            ]),
+            engine::FILTER_SUMMARY => fields.extend([
+                Field::new("VolumeName", text(p, "volume_name")?),
+                Field::new("Lane", text(p, "lane")?),
+                Field::new("Blacklisted", Data::U64(u64_field(p, "blacklisted")?)),
+                Field::new(
+                    "NotWhitelisted",
+                    Data::U64(u64_field(p, "not_whitelisted")?),
+                ),
+                Field::new(
+                    "UnresolvedExcluded",
+                    Data::U64(u64_field(p, "unresolved_excluded")?),
+                ),
+                Field::new(
+                    "UnresolvedPaths",
+                    Data::U64(u64_field(p, "unresolved_paths")?),
+                ),
             ]),
             _ => bail!("unsupported event ID {}", event.id),
         }
@@ -267,11 +295,11 @@ pub fn fields(event: &Event) -> Result<Vec<Field>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::journal::{fixtures, parse_batch};
+    use crate::journal::{self, fixtures};
     use serde_json::json;
 
     fn record(reason: u32) -> Event {
-        let batch = parse_batch(
+        let batch = journal::parse_batch(
             &fixtures::batch(3, 100, reason, &[65, 0, 10, 0xd800, 37, 49]),
             100,
         )
@@ -308,30 +336,27 @@ mod tests {
         assert!(
             fields
                 .iter()
-                .any(|f| f.0 == "ReasonFlags" && f.1 == Data::U32(0x80002308))
+                .any(|f| f.name == "ReasonFlags" && f.value == Data::U32(0x80002308))
         );
         assert!(
             fields
                 .iter()
-                .any(|f| f.0 == "UnknownReasonBits" && f.1 == Data::U32(8))
+                .any(|f| f.name == "UnknownReasonBits" && f.value == Data::U32(8))
         );
-        assert!(fields.iter().any(|f| f.0 == "Reasons"
-            && f.1 == Data::Text("FILE_CREATE | FILE_DELETE | RENAME_NEW_NAME | CLOSE".into())));
+        assert!(fields.iter().any(|f| f.name == "Reasons"
+            && f.value
+                == Data::Text("FILE_CREATE | FILE_DELETE | RENAME_NEW_NAME | CLOSE".into())));
+        assert!(fields.iter().any(|f| f.name == "EventIdentity"
+            && f.value == Data::Text("stable-fixture-identity".into())));
+        assert!(fields.iter().any(|f| f.name == "FileNameUtf16Hex"
+            && f.value == Data::Text("0041 0000 000a d800 0025 0031".into())));
         assert!(
             fields
                 .iter()
-                .any(|f| f.0 == "EventIdentity"
-                    && f.1 == Data::Text("stable-fixture-identity".into()))
-        );
-        assert!(fields.iter().any(|f| f.0 == "FileNameUtf16Hex"
-            && f.1 == Data::Text("0041 0000 000a d800 0025 0031".into())));
-        assert!(
-            fields
-                .iter()
-                .any(|f| f.0 == "FileNameDisplayEscaped" && f.1 == Data::Boolean(true))
+                .any(|f| f.name == "FileNameDisplayEscaped" && f.value == Data::Boolean(true))
         );
         for field in fields {
-            field.1.bytes().unwrap();
+            field.value.bytes().unwrap();
         }
     }
 
@@ -364,6 +389,13 @@ mod tests {
             engine::LIFECYCLE,
             json!({"state":"stopped","volume_count":1}),
         ));
+        examples.push(Event::new(
+            engine::FILTER_SUMMARY,
+            json!({
+                "volume_name":"fixture","lane":"live","blacklisted":1,"not_whitelisted":2,
+                "unresolved_excluded":3,"unresolved_paths":4
+            }),
+        ));
         for event in examples {
             let node = manifest
                 .descendants()
@@ -388,13 +420,13 @@ mod tests {
             assert_eq!(
                 actual
                     .iter()
-                    .map(|f| (f.0, f.1.input_type()))
+                    .map(|f| (f.name, f.value.input_type()))
                     .collect::<Vec<_>>(),
                 expected,
                 "event {}",
                 event.id
             );
-            assert_eq!(actual[0].1, Data::U32(2));
+            assert_eq!(actual[0].value, Data::U32(2));
         }
     }
 

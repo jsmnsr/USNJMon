@@ -30,13 +30,25 @@ pub struct Batch {
 }
 
 fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+    u16::from_le_bytes(
+        bytes[offset..offset + 2]
+            .try_into()
+            .expect("validated fixed-width record slice"),
+    )
 }
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    u32::from_le_bytes(
+        bytes[offset..offset + 4]
+            .try_into()
+            .expect("validated fixed-width record slice"),
+    )
 }
 fn i64_at(bytes: &[u8], offset: usize) -> i64 {
-    i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+    i64::from_le_bytes(
+        bytes[offset..offset + 8]
+            .try_into()
+            .expect("validated fixed-width record slice"),
+    )
 }
 
 pub fn parse_batch(bytes: &[u8], start_usn: i64) -> Result<Batch> {
@@ -131,6 +143,7 @@ fn hex_id(bytes: &[u8]) -> String {
     bytes.iter().rev().map(|b| format!("{b:02x}")).collect()
 }
 
+#[must_use]
 pub fn reasons(raw: u32) -> (Vec<&'static str>, u32) {
     const FLAGS: &[(u32, &str)] = &[
         (0x1, "DATA_OVERWRITE"),
@@ -170,6 +183,7 @@ pub fn reasons(raw: u32) -> (Vec<&'static str>, u32) {
 
 #[cfg(test)]
 pub mod fixtures {
+    #[must_use]
     pub fn batch(major: u16, usn: i64, reason: u32, name: &[u16]) -> Vec<u8> {
         let fixed = if major == 3 { 76 } else { 60 };
         let u = if major == 3 { 40 } else { 24 };

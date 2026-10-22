@@ -2,6 +2,24 @@
 
 Implementation was checked against these Microsoft references:
 
+- [EvtExportLog](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtexportlog)
+  exports an existing channel/file; it cannot synthesize events from raw USN input.
+  Offline conversion therefore writes EVTX directly, without an intermediate log.
+- [EvtQuery](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtquery)
+  and EvtRender validate generated files through the native file-query path.
+- [EvtFormatMessage](https://learn.microsoft.com/en-us/windows/win32/api/winevt/nf-winevt-evtformatmessage)
+  requires provider metadata for ordinary event descriptions. Unregistered offline
+  files retain readable Details, but cannot promise a populated General message.
+- [FindFirstVolumeW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-findfirstvolumew),
+  FindNextVolumeW and FindVolumeClose enumerate volume GUIDs (not drive-letter
+  ordering). GetVolumeInformationW limits discovery to NTFS;
+  GetVolumePathNamesForVolumeNameW supplies mount aliases.
+- [OpenFileById](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-openfilebyid):
+  zero desired access for parent metadata, full sharing and backup-semantics
+  directory flag; no privilege enablement or file-content read.
+- [GetFinalPathNameByHandleW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew):
+  VOLUME_NAME_GUID works without drive letters. Results are current paths,
+  not USN historical reconstruction; errors are labeled as unresolved.
 - [FSCTL_READ_USN_JOURNAL](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ni-winioctl-fsctl_read_usn_journal):
   local volume handles and returned USN buffer.
 - [USN_JOURNAL_DATA_V0](https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_journal_data_v0)
@@ -47,3 +65,10 @@ Implementation was checked against these Microsoft references:
   durable transaction with Event Log.
 - [Service state transitions](https://learn.microsoft.com/en-us/windows/win32/services/service-status-transitions):
   SCM control handling and reporting terminal status.
+
+The independently implemented EVTX writer follows byte-layout facts documented
+in the [libevtx EVTX format analysis](https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc)
+and Microsoft's [MS-EVEN6](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-even6/)
+Binary XML specification. It uses typed template substitutions, explicit
+name/template hash tables, 64 KiB chunks and file/chunk CRCs. No third-party
+implementation or documentation text is incorporated.

@@ -2,22 +2,47 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 #[derive(Clone, Default)]
-pub struct Stop(Arc<(Mutex<bool>, Condvar)>);
+pub struct Stop {
+    signal: Arc<Signal>,
+}
+
+#[derive(Default)]
+struct Signal {
+    requested: Mutex<bool>,
+    changed: Condvar,
+}
 
 impl Stop {
     pub fn request(&self) {
-        let (lock, wake) = &*self.0;
-        *lock.lock().unwrap() = true;
-        wake.notify_all();
+        *self
+            .signal
+            .requested
+            .lock()
+            .expect("cancellation lock poisoned") = true;
+        self.signal.changed.notify_all();
     }
+    #[must_use]
     pub fn requested(&self) -> bool {
-        *self.0.0.lock().unwrap()
+        *self
+            .signal
+            .requested
+            .lock()
+            .expect("cancellation lock poisoned")
     }
+    #[must_use]
     pub fn wait(&self, duration: Duration) -> bool {
-        let (lock, wake) = &*self.0;
-        let (stopped, _) = wake
-            .wait_timeout_while(lock.lock().unwrap(), duration, |s| !*s)
-            .unwrap();
+        let (stopped, _) = self
+            .signal
+            .changed
+            .wait_timeout_while(
+                self.signal
+                    .requested
+                    .lock()
+                    .expect("cancellation lock poisoned"),
+                duration,
+                |s| !*s,
+            )
+            .expect("cancellation lock poisoned while waiting");
         *stopped
     }
 }
