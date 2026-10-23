@@ -28,6 +28,8 @@ explain optional resource-only installation and unavailable source metadata.
 
 ## 2. Monitor continuously
 
+Download a Windows x64 preview from [GitHub Releases](https://github.com/jsmnsr/USNJMon/releases)
+and follow the [release installation guide](docs/releases.md), or build from source.
 In elevated **Windows PowerShell 5.1**, from a built source checkout:
 
 ```powershell
@@ -62,7 +64,9 @@ include exact filename and live-only filters.
 
 Windows x64, Rust 1.99.1, Windows SDK; MSVC and GNU targets.
 Run `.\scripts\Build.ps1` after [setting up the build tools](docs/development.md).
-No prebuilt release is currently published.
+Preview ZIPs include the executable, provider resources and installation scripts;
+no compiler is needed on the destination machine. Releases are manually published,
+unsigned prereleases; see [packaging and release policy](docs/releases.md).
 
 Renamed from **UsnEventLog**: existing installations are not changed automatically.
 Read the [migration instructions](docs/service.md#upgrading-and-migrating) before
