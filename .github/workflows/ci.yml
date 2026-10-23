@@ -37,3 +37,11 @@ jobs:
             [void][System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$null, [ref]$errors)
             if ($errors) { throw ($errors | Out-String) }
           }
+      - name: Exercise release packaging without installation
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: powershell
+        run: |
+          $metadata = cargo metadata --locked --offline --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed.' }
+          $version = ($metadata.packages | Where-Object name -eq 'usnjmon').version
+          .\scripts\Test-Packaging.ps1 -ExpectedVersion $version -OutputDirectory (Join-Path $env:RUNNER_TEMP 'package-test')

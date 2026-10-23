@@ -1,0 +1,112 @@
+name: Preview release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Cargo.toml version to publish (for example 0.5.0); existing tags cannot be reused'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-release
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    env:
+      RUSTFLAGS: -D warnings
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Require main and an unused version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Dispatch releases from main only.' }
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a numeric major.minor.patch version.' }
+          $tags = git ls-remote --tags origin "refs/tags/v$env:RELEASE_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect release tags.' }
+          if ($tags) { throw 'Tag already exists; releases are never overwritten.' }
+      - name: Install pinned Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed.' }
+          rustup override set 1.99.1
+          if ($LASTEXITCODE -ne 0) { throw 'Rust selection failed.' }
+      - name: Format, lint, test, build and verify resources
+        shell: pwsh
+        run: .\scripts\Build.ps1
+      - name: Package and validate under Windows PowerShell 5.1
+        id: package
+        shell: powershell
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'preview-release'
+          $package = .\scripts\Test-Packaging.ps1 -ExpectedVersion $env:RELEASE_VERSION -OutputDirectory $output
+          $build = Get-Content -LiteralPath "$output\usnjmon-$env:RELEASE_VERSION-windows-x64.build-info.json" -Raw | ConvertFrom-Json
+          if (-not $build.cleanSource -or $build.commit -ne $env:GITHUB_SHA) { throw 'Release requires the exact clean dispatched commit.' }
+          "version=$($package.Version)" >> $env:GITHUB_OUTPUT
+      - name: Preserve verified release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-release
+          path: |
+            ${{ runner.temp }}\preview-release\*.zip
+            ${{ runner.temp }}\preview-release\*.json
+            ${{ runner.temp }}\preview-release\SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: package
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_VERSION: ${{ needs.package.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: preview-release
+          path: release
+      - name: Publish a prerelease without replacing existing assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location release
+          $assets = @()
+          foreach ($line in Get-Content -LiteralPath SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([a-zA-Z0-9.-]+)$') { throw 'Invalid asset checksum entry.' }
+            $hash = $Matches[1]
+            $name = $Matches[2]
+            if ((Get-FileHash -LiteralPath $name).Hash -ne $hash) { throw "Asset checksum mismatch: $name" }
+            $assets += $name
+          }
+          $assets += 'SHA256SUMS.txt'
+          $notes = @"
+          Windows x64 preview built from commit $env:GITHUB_SHA.
+
+          Download the ZIP and SHA256SUMS.txt; extract the complete archive.
+          Follow docs\releases.md for installation, validation and upgrades.
+          Executables/scripts are unsigned. Checksums and build-info identify artifacts, not a trusted publisher signature.
+          No project redistribution license is currently declared; dependency notices are included.
+
+          Fresh installs are stopped with Manual startup. Default scope is accessible local NTFS volumes; review config.example.json first.
+          Collection never creates, resizes or deletes journals. Journal wrap can lose uncollected history; circular log retention can overwrite collected events.
+          No process/user attribution, historical full-path guarantee or durable ETW delivery acknowledgement.
+          CI validates synthetic/native-resource/offline tests and the extracted package, not privileged service lifecycle acceptance.
+
+          Build run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+          "@
+          $notes | Set-Content -LiteralPath notes.txt -Encoding utf8
+          gh api --method POST "repos/$env:GH_REPO/git/refs" -f "ref=refs/tags/v$env:RELEASE_VERSION" -f "sha=$env:GITHUB_SHA" --silent
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot create a new tag; existing tags are never reused or moved.' }
+          gh release create "v$env:RELEASE_VERSION" @assets --repo $env:GH_REPO --verify-tag --title "USNJMon $env:RELEASE_VERSION preview" --prerelease --latest=false --notes-file notes.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Release publishing failed; inspect any partial release before retrying.' }

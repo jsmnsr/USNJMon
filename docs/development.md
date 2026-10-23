@@ -27,6 +27,10 @@ needed for provider/service installation and Event Viewer General descriptions.
 No legacy provider is built or installed by the renamed product. Old installed
 resources are deliberately retained for old history.
 
+Use `scripts\Package.ps1` and `scripts\Test-Package.ps1` for a versioned Windows
+x64 MSVC ZIP with checksums, build metadata and dependency notices. The
+[release guide](releases.md) describes the manual-only publishing workflow.
+
 ## Rust style
 
 Follow the applicable general rules in
