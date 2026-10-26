@@ -11,9 +11,9 @@ matching GitHub prerelease. Compare the ZIP's SHA-256 with the published
 checksum before extracting:
 
 ```powershell
-Get-FileHash .\usnjmon-0.5.1-windows-x64.zip -Algorithm SHA256
-Expand-Archive .\usnjmon-0.5.1-windows-x64.zip -DestinationPath .\preview
-Set-Location .\preview\usnjmon-0.5.1-windows-x64
+Get-FileHash .\usnjmon-0.5.2-windows-x64.zip -Algorithm SHA256
+Expand-Archive .\usnjmon-0.5.2-windows-x64.zip -DestinationPath .\preview
+Set-Location .\preview\usnjmon-0.5.2-windows-x64
 .\bin\usnjmon.exe check-config .\config.example.json
 .\bin\usnjmon.exe verify-resources .\bin\usnjmon-provider.dll
 ```
@@ -82,7 +82,7 @@ Dependencies retain their respective licenses; their notices are included in
 2. Confirm main's Windows CI passes. Review [live acceptance](validation.md)
    on a disposable authorized machine; CI does not install/start services.
 3. Run **Actions > Preview release > Run workflow**, select `main`, and enter
-   the exact numeric Cargo version, for example `0.5.1`.
+   the exact numeric Cargo version, for example `0.5.2`.
 4. The workflow pins its dispatched commit, runs the official build checks,
    packages Windows x64 MSVC, and verifies the extracted files under Windows
    PowerShell 5.1 before publishing `v<version>` as a prerelease.
@@ -96,8 +96,8 @@ that state explicitly rather than force-moving tags or replacing assets.
 To package locally after `scripts\Build.ps1`, using a new output directory:
 
 ```powershell
-$package = .\scripts\Package.ps1 -ExpectedVersion 0.5.1 -OutputDirectory C:\Artifacts\usnjmon-0.5.1
-.\scripts\Test-Package.ps1 -Archive $package.Archive -ExpectedVersion 0.5.1
+$package = .\scripts\Package.ps1 -ExpectedVersion 0.5.2 -OutputDirectory C:\Artifacts\usnjmon-0.5.2
+.\scripts\Test-Package.ps1 -Archive $package.Archive -ExpectedVersion 0.5.2
 ```
 
 The release ZIP, external SBOM/build metadata, and `SHA256SUMS.txt` are the
