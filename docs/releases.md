@@ -11,9 +11,9 @@ matching GitHub prerelease. Compare the ZIP's SHA-256 with the published
 checksum before extracting:
 
 ```powershell
-Get-FileHash .\usnjmon-0.5.0-windows-x64.zip -Algorithm SHA256
-Expand-Archive .\usnjmon-0.5.0-windows-x64.zip -DestinationPath .\preview
-Set-Location .\preview\usnjmon-0.5.0-windows-x64
+Get-FileHash .\usnjmon-0.5.1-windows-x64.zip -Algorithm SHA256
+Expand-Archive .\usnjmon-0.5.1-windows-x64.zip -DestinationPath .\preview
+Set-Location .\preview\usnjmon-0.5.1-windows-x64
 .\bin\usnjmon.exe check-config .\config.example.json
 .\bin\usnjmon.exe verify-resources .\bin\usnjmon-provider.dll
 ```
@@ -52,20 +52,21 @@ Default uninstall retains files, state and event resources. See the
 
 The ZIP includes only the three built artifacts, official install/uninstall
 scripts, tracked documentation, example configuration, build metadata,
-file checksums, and dependency notices/inventory. It excludes machine logs,
+file checksums, the MIT `LICENSE`, and dependency notices/inventory. It excludes machine logs,
 checkpoints, local settings and deployment/diagnostic reports.
 
 `build-info.json` records the source commit, compiler, target, lockfile hash,
-source cleanliness and CI run URL when built by Actions. The CycloneDX 1.6
+source cleanliness, project license and CI run URL when built by Actions. The CycloneDX 1.6
 SBOM includes the target's non-dev Cargo closure (including build/proc-macro
 dependencies) and Rust's standard library, not every Windows platform component.
 Rust's standard-library notice file covers its bundled third-party notices.
 
 Preview executables and scripts are **unsigned**. Checksums detect file changes;
-they are not Authenticode signatures or signed build attestations. No project
-license is currently declared: access to a package does not grant a project
-redistribution license. Third-party notices do not license USNJMon itself.
-Choose a project license before broader distribution.
+they are not Authenticode signatures or signed build attestations.
+USNJMon is licensed under the [MIT License](../LICENSE). Preserve its copyright
+and permission notice when redistributing copies or substantial portions.
+Dependencies retain their respective licenses; their notices are included in
+`third-party`. Both build metadata and the SBOM identify the project license as MIT.
 
 ## Maintainer release procedure
 
@@ -73,7 +74,7 @@ Choose a project license before broader distribution.
 2. Confirm main's Windows CI passes. Review [live acceptance](validation.md)
    on a disposable authorized machine; CI does not install/start services.
 3. Run **Actions > Preview release > Run workflow**, select `main`, and enter
-   the exact numeric Cargo version, for example `0.5.0`.
+   the exact numeric Cargo version, for example `0.5.1`.
 4. The workflow pins its dispatched commit, runs the official build checks,
    packages Windows x64 MSVC, and verifies the extracted files under Windows
    PowerShell 5.1 before publishing `v<version>` as a prerelease.
@@ -87,8 +88,8 @@ that state explicitly rather than force-moving tags or replacing assets.
 To package locally after `scripts\Build.ps1`, using a new output directory:
 
 ```powershell
-$package = .\scripts\Package.ps1 -ExpectedVersion 0.5.0 -OutputDirectory C:\Artifacts\usnjmon-0.5.0
-.\scripts\Test-Package.ps1 -Archive $package.Archive -ExpectedVersion 0.5.0
+$package = .\scripts\Package.ps1 -ExpectedVersion 0.5.1 -OutputDirectory C:\Artifacts\usnjmon-0.5.1
+.\scripts\Test-Package.ps1 -Archive $package.Archive -ExpectedVersion 0.5.1
 ```
 
 The release ZIP, external SBOM/build metadata, and `SHA256SUMS.txt` are the
