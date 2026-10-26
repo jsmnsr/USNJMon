@@ -1,0 +1,15 @@
+[package]
+name = "usnjmon-evtx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Bounded EVTX file and typed Binary XML encoding for USNJMon"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+sha2.workspace = true

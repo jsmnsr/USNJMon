@@ -92,11 +92,23 @@ try {
     foreach ($id in ($selected | Sort-Object)) {
         if ($id -eq $application.id) { continue }
         $package = $packages[$id]
-        if (-not $package.source -or -not $package.source.StartsWith('registry+')) {
+        $workspaceMember = -not $package.source -and $id -in $metadata.workspace_members
+        if ($workspaceMember) {
+            $manifest = [IO.Path]::GetFullPath($package.manifest_path)
+            $crateRoot = [IO.Path]::GetFullPath((Join-Path $root 'crates')) + [IO.Path]::DirectorySeparatorChar
+            if (-not $manifest.StartsWith($crateRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                $package.license -ne $application.license -or $package.version -ne $ExpectedVersion) {
+                throw "Workspace dependency must be in crates with the application version/license: $($package.name)"
+            }
+        } elseif (-not $package.source -or -not $package.source.StartsWith('registry+')) {
             throw "Review licensing/provenance before packaging non-registry dependency: $($package.name)"
         }
         if (-not $package.license) { throw "Missing dependency license expression: $($package.name)" }
-        $reference = "pkg:cargo/$($package.name)@$($package.version)"
+        $reference = if ($workspaceMember) {
+            "pkg:generic/$($package.name)@$($package.version)"
+        } else {
+            "pkg:cargo/$($package.name)@$($package.version)"
+        }
         $refs[$id] = $reference
         $license = $package.license.Replace('MIT/Apache-2.0', 'MIT OR Apache-2.0')
         $components += [ordered]@{
@@ -104,6 +116,8 @@ try {
             version = $package.version; purl = $reference
             licenses = @(@{ expression = $license })
         }
+        # First-party members use the packaged root LICENSE and build-info source commit.
+        if ($workspaceMember) { continue }
         $source = Split-Path $package.manifest_path -Parent
         $notices = @(Get-ChildItem -LiteralPath $source -File |
             Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)([._-]|$)' })
