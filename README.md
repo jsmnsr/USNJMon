@@ -71,3 +71,9 @@ unsigned prereleases; see [packaging and release policy](docs/releases.md).
 Renamed from **UsnEventLog**: existing installations are not changed automatically.
 Read the [migration instructions](docs/service.md#upgrading-and-migrating) before
 switching services. The repository URL remains unchanged.
+
+## License
+
+USNJMon is licensed under the [MIT License](LICENSE).
+Release ZIPs include this license and third-party notices in `third-party`;
+dependencies remain covered by their respective licenses.
