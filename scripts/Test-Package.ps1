@@ -27,7 +27,7 @@ try {
     foreach ($name in @('bin\usnjmon.exe', 'bin\usnjmon-provider.dll', 'bin\usnjmon.man',
         'scripts\Install.ps1', 'scripts\Uninstall.ps1', 'config.example.json', 'README.md',
         'docs\releases.md', 'third-party\Rust-standard-library.html', 'build-info.json',
-        'sbom.cdx.json', 'FILES.sha256')) {
+        'sbom.cdx.json', 'FILES.sha256', 'LICENSE')) {
         if (-not (Test-Path -LiteralPath (Join-Path $package $name) -PathType Leaf)) {
             throw "Missing packaged file: $name"
         }
@@ -56,6 +56,16 @@ try {
     }
     $build = Get-Content -LiteralPath "$package\build-info.json" -Raw | ConvertFrom-Json
     $sbom = Get-Content -LiteralPath "$package\sbom.cdx.json" -Raw | ConvertFrom-Json
+    if ($build.projectLicense -ne 'MIT' -or
+        @($sbom.metadata.component.licenses).Count -ne 1 -or
+        $sbom.metadata.component.licenses[0].expression -ne 'MIT') {
+        throw 'Package must declare the MIT project license in build metadata and SBOM.'
+    }
+    $sourceLicense = Join-Path (Split-Path $PSScriptRoot -Parent) 'LICENSE'
+    if ((Get-FileHash -LiteralPath "$package\LICENSE").Hash -ne
+        (Get-FileHash -LiteralPath $sourceLicense).Hash) {
+        throw 'Packaged LICENSE does not match the source license.'
+    }
     if ($build.version -ne $ExpectedVersion -or $build.target -ne 'x86_64-pc-windows-msvc' -or
         $build.commit -notmatch '^[a-f0-9]{40}$' -or $sbom.bomFormat -ne 'CycloneDX' -or
         $sbom.metadata.component.version -ne $ExpectedVersion -or $sbom.components.Count -eq 0) {

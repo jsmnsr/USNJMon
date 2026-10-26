@@ -28,14 +28,18 @@ No legacy provider is built or installed by the renamed product. Old installed
 resources are deliberately retained for old history.
 
 Use `scripts\Package.ps1` and `scripts\Test-Package.ps1` for a versioned Windows
-x64 MSVC ZIP with checksums, build metadata and dependency notices. The
+x64 MSVC ZIP with checksums, build metadata, the MIT license and dependency notices. The
 [release guide](releases.md) describes the manual-only publishing workflow.
 
 ## Rust style
 
-Follow the applicable general rules in
-[Google's Rust Style Guide](https://google.github.io/styleguide/rustguide.html):
-standard stable rustfmt, 100-column maximum, snake_case modules, one primary
+Follow [Microsoft's Pragmatic Rust Guidelines](https://microsoft.github.io/rust-guidelines/)
+for application and library design. Apply their spirit and safety, performance
+and maintainability goals; document justified exceptions when a guideline does
+not fit this Cargo Windows application.
+
+The following are local project conventions, not a summary of Microsoft's
+guidelines: stable rustfmt, 100-column maximum, snake_case modules, one primary
 abstraction per leaf module, explicit imports from one module per statement,
 qualified ordinary cross-module function calls, and named multi-field structures.
 Use borrows unless ownership/sharing is required, descriptive `expect` messages
@@ -46,8 +50,7 @@ Unsafe code is limited to native adapters, with `SAFETY:` comments explaining
 lifetimes, buffer sizes and ownership. Clippy rejects undocumented unsafe blocks
 and production `unwrap`; Rust rejects implicit unsafe operations inside unsafe
 functions. Shared `Arc` cancellation state is required for SCM/worker threads.
-Use stable Rust: Google's Chromium GN/flat-crate infrastructure and
-Fuchsia-specific policies do not apply to this Cargo Windows application.
+Use stable Rust and the pinned toolchain documented above.
 
 The library modules are internal application/test boundaries, not a stable
 public library API.
@@ -60,4 +63,4 @@ including XPath selection and named-field Unicode round trips. The tests never
 register providers, install/start services, read host journals or write live logs.
 
 See [validation](validation.md) for explicitly authorized deployment acceptance
-checks and [references](references.md) for native API/format decisions.
+checks.

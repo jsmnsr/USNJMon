@@ -41,6 +41,18 @@ try {
     Assert-Fails {
         & "$PSScriptRoot\Test-Package.ps1" -Archive $corrupt -ExpectedVersion $ExpectedVersion
     } '*checksum mismatch*'
+    $missingLicense = Join-Path $scratch 'missing-license.zip'
+    Copy-Item -LiteralPath $package.Archive -Destination $missingLicense
+    $zip = [IO.Compression.ZipFile]::Open($missingLicense, [IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $entry = $zip.Entries | Where-Object {
+            $_.FullName.Replace('/', '\') -eq "usnjmon-$ExpectedVersion-windows-x64\LICENSE"
+        }
+        $entry.Delete()
+    } finally { $zip.Dispose() }
+    Assert-Fails {
+        & "$PSScriptRoot\Test-Package.ps1" -Archive $missingLicense -ExpectedVersion $ExpectedVersion
+    } '*Missing packaged file: LICENSE*'
     $unsafe = Join-Path $scratch 'unsafe.zip'
     Copy-Item -LiteralPath $package.Archive -Destination $unsafe
     $zip = [IO.Compression.ZipFile]::Open($unsafe, [IO.Compression.ZipArchiveMode]::Update)
@@ -74,7 +86,7 @@ try {
             throw 'Asset checksum mismatch.'
         }
     }
-    Write-Host 'Packaging checks passed: extraction/resources, version/output guards, corruption, traversal, duplicate entries, SBOM references and asset hashes.'
+    Write-Host 'Packaging checks passed: extraction/resources, MIT licensing, version/output guards, corruption, traversal, duplicate entries, SBOM references and asset hashes.'
     $package
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force

@@ -21,6 +21,7 @@ try {
     if ($application.name -ne 'usnjmon' -or $application.version -ne $ExpectedVersion) {
         throw 'Requested version must match the usnjmon version in Cargo.toml.'
     }
+    if ($application.license -ne 'MIT') { throw 'Expected MIT project license in Cargo.toml.' }
     if (Test-Path -LiteralPath $OutputDirectory) { throw 'OutputDirectory must not already exist.' }
     $commit = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0) { throw 'Cannot identify source commit.' }
@@ -61,9 +62,9 @@ try {
     foreach ($document in $documents) {
         Copy-Item -LiteralPath (Join-Path $root $document.Replace('/', '\')) -Destination "$stage\docs"
     }
-    # Include project licensing if one is added; never invent a license for the owner.
     $projectNotices = @(& git ls-files -- 'LICENSE*' 'COPYING*' 'NOTICE*')
     if ($LASTEXITCODE -ne 0) { throw 'Cannot list project notices.' }
+    if ('LICENSE' -notin $projectNotices) { throw 'Tracked MIT LICENSE is required for release packaging.' }
     foreach ($notice in $projectNotices) {
         Copy-Item -LiteralPath (Join-Path $root $notice) -Destination $stage
     }
@@ -140,6 +141,7 @@ try {
             component = @{
                 type = 'application'; 'bom-ref' = $refs[$application.id]
                 name = 'usnjmon'; version = $ExpectedVersion; purl = $refs[$application.id]
+                licenses = @(@{ expression = $application.license })
             }
         }
         components = $components
@@ -152,7 +154,7 @@ try {
         cleanSource = ($status.Count -eq 0)
         cargoLockSha256 = (Get-FileHash -LiteralPath (Join-Path $root 'Cargo.lock')).Hash.ToLowerInvariant()
         authenticodeSigned = $false
-        projectLicense = if ($projectNotices.Count) { 'See included project notices.' } else { 'No project license is declared; no redistribution license is granted by this package.' }
+        projectLicense = $application.license
         sbomScope = 'Non-dev Cargo dependency closure (including build/proc-macro dependencies) and Rust standard library; not a complete inventory of the Windows platform.'
     }
     if ($env:GITHUB_ACTIONS -eq 'true') {

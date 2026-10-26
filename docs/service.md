@@ -226,5 +226,4 @@ completion. Stalled drivers, synchronous path/Event Log calls or flushes can
 delay shutdown. Logs/checkpoints can generate self-traffic; default filters reduce
 resolvable standard-path noise, not unresolved/nonstandard-location traffic.
 
-See [schema and queries](events.md), [acceptance checks](validation.md), and
-[native API references](references.md).
+See [schema and queries](events.md) and [acceptance checks](validation.md).

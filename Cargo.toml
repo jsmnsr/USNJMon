@@ -1,9 +1,10 @@
 [package]
 name = "usnjmon"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.85"
 description = "USNJMon: convert USN journals to EVTX or monitor continuously"
+license = "MIT"
 publish = false
 
 [lints.rust]
