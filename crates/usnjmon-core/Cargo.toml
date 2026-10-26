@@ -1,0 +1,22 @@
+[package]
+name = "usnjmon-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Portable USN parsing, event schemas and collection policy for USNJMon"
+
+[lints]
+workspace = true
+
+[features]
+test-util = []
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+roxmltree.workspace = true

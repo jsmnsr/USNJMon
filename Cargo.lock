@@ -199,8 +199,28 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "usnjmon-core",
+ "usnjmon-evtx",
  "windows-service",
  "windows-sys",
+]
+
+[[package]]
+name = "usnjmon-core"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "roxmltree",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "usnjmon-evtx"
+version = "0.5.1"
+dependencies = [
+ "anyhow",
+ "sha2",
 ]
 
 [[package]]

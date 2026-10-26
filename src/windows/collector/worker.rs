@@ -1,24 +1,21 @@
-//! Continuous live and historical collection with independent durable cursors.
+//! Per-lane polling, retryable source failures and fatal destination failures.
 
-use super::discovery;
-use super::event_log;
-use super::volume;
-
-use crate::config::{Config, VolumeConfig};
-use crate::engine::{self, Event, Sink};
-use crate::filter::{FilteringSink, Policy};
-use crate::journal::{self, Batch};
-use crate::state::{Checkpoint, FileStore};
-use crate::stop::Stop;
+use super::super::event_log;
+use super::super::volume;
+use crate::config::VolumeConfig;
+use crate::state::FileStore;
 use anyhow::{Context, Result};
 use serde_json::json;
-use std::fs::{File, OpenOptions};
-use std::os::windows::fs::OpenOptionsExt;
-use std::path::Path;
 use std::time::{Duration, Instant};
+use usnjmon_core::checkpoint::Checkpoint;
+use usnjmon_core::engine;
+use usnjmon_core::event::{self, Event, Sink};
+use usnjmon_core::filter::{FilteringSink, Policy};
+use usnjmon_core::journal::{self, Batch};
+use usnjmon_core::stop::Stop;
 use windows_sys::Win32::Foundation::ERROR_JOURNAL_ENTRY_DELETED;
 
-struct Worker {
+pub(super) struct Worker {
     config: VolumeConfig,
     policy: Policy,
     lane: Lane,
@@ -29,7 +26,7 @@ struct Worker {
     retry_at: Instant,
 }
 
-enum Lane {
+pub(super) enum Lane {
     Live,
     History { live_store: FileStore },
 }
@@ -43,15 +40,30 @@ impl Lane {
     }
 }
 
-struct StopOnExit(Stop);
-
-impl Drop for StopOnExit {
-    fn drop(&mut self) {
-        self.0.request();
-    }
-}
-
 impl Worker {
+    pub(super) fn new(
+        config: VolumeConfig,
+        policy: Policy,
+        lane: Lane,
+        store: FileStore,
+        checkpoint: Option<Checkpoint>,
+    ) -> Self {
+        Self {
+            config,
+            policy,
+            lane,
+            checkpoint,
+            store,
+            restart: true,
+            invalidated: false,
+            retry_at: Instant::now(),
+        }
+    }
+
+    pub(super) fn label(&self) -> String {
+        format!("volume {} ({})", self.config.name, self.lane.name())
+    }
+
     fn source_failed(
         &mut self,
         error: &anyhow::Error,
@@ -71,7 +83,7 @@ impl Worker {
             self.lane.name()
         );
         sink.write(&Event::new(
-            engine::HEALTH,
+            event::HEALTH,
             json!({
                 "volume_name": format!("{} ({})", self.config.name, self.lane.name()), "configured_path": self.config.path,
                 "checkpoint": self.checkpoint, "error": format!("{error:#}"),
@@ -84,136 +96,7 @@ impl Worker {
     }
 }
 
-pub fn lock_state(directory: &Path) -> Result<File> {
-    anyhow::ensure!(
-        directory.is_dir(),
-        "state directory does not exist; use the installation script"
-    );
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .share_mode(0)
-        .open(directory.join("collector.lock"))
-        .context("exclusive state lock (another collector may be running)")
-}
-
-pub fn run(
-    config_path: &Path,
-    state_path: &Path,
-    stop: Stop,
-    ready: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    let _lock = lock_state(state_path)?;
-    let mut sink = event_log::EventLog::open(&stop)?;
-    let result = collect(config_path, state_path, &stop, &mut sink, ready);
-    if let Err(error) = &result {
-        let event = Event::new(engine::FATAL, json!({"error": format!("{error:#}")}));
-        if let Err(report_error) = sink.write(&event) {
-            eprintln!("cannot report fatal event: {report_error:#}; original failure: {error:#}");
-        }
-    }
-    result
-}
-
-fn collect(
-    config_path: &Path,
-    state_path: &Path,
-    stop: &Stop,
-    sink: &mut impl Sink,
-    ready: impl FnOnce() -> Result<()>,
-) -> Result<()> {
-    let config = Config::load(config_path)?;
-    let policy = config.path_filters.compile()?;
-    let selection = discovery::select(&config.volumes)?;
-    for (path, error) in selection.warnings {
-        sink.write(&Event::new(
-            engine::HEALTH,
-            json!({
-                "volume_name": "discovery", "configured_path": path,
-                "checkpoint": null, "error": error, "retry_interval_ms": 0
-            }),
-        ))?;
-    }
-    let poll = Duration::from_millis(config.poll_interval_ms);
-    let interval = Duration::from_millis(config.event_interval_ms);
-    let live_path = state_path.join("live");
-    std::fs::create_dir_all(&live_path)
-        .context("create private inherited live-checkpoint directory")?;
-    let volume_count = selection.volumes.len();
-    let mut workers = Vec::new();
-    for volume in selection.volumes {
-        let live_store = FileStore::new(&live_path, &volume.name);
-        let live_checkpoint = live_store.load()?;
-        if let Some(checkpoint) = &live_checkpoint {
-            checkpoint.validate_live()?;
-        }
-        let store = FileStore::new(state_path, &volume.name);
-        let checkpoint = store.load()?;
-        workers.push(Worker {
-            config: volume.clone(),
-            policy: policy.clone(),
-            lane: Lane::Live,
-            checkpoint: live_checkpoint,
-            store: live_store,
-            restart: true,
-            invalidated: false,
-            retry_at: Instant::now(),
-        });
-        let live_store = FileStore::new(&live_path, &volume.name);
-        workers.push(Worker {
-            config: volume,
-            policy: policy.clone(),
-            lane: Lane::History { live_store },
-            checkpoint,
-            store,
-            restart: true,
-            invalidated: false,
-            retry_at: Instant::now(),
-        });
-    }
-    sink.write(&Event::new(
-        engine::LIFECYCLE,
-        json!({"state": "started", "volume_count": volume_count}),
-    ))?;
-    std::thread::scope(|scope| -> Result<()> {
-        let _cancel_on_unwind = StopOnExit(stop.clone());
-        let mut handles = Vec::new();
-        for worker in workers {
-            handles.push(scope.spawn(move || {
-                let _cancel_on_exit = StopOnExit(stop.clone());
-                let label = format!("volume {} ({})", worker.config.name, worker.lane.name());
-                collect_worker(worker, stop, poll, interval, config.retry_interval_ms)
-                    .with_context(|| label)
-            }));
-        }
-        let mut result = ready();
-        if result.is_err() {
-            stop.request();
-        }
-        for handle in handles {
-            let outcome = handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("collector worker panicked"))
-                .and_then(|result| result);
-            if let Err(error) = outcome {
-                eprintln!("worker stopped: {error:#}");
-                if result.is_ok() {
-                    result = Err(error);
-                }
-            }
-        }
-        result
-    })?;
-    sink.write(&Event::new(
-        engine::LIFECYCLE,
-        json!({"state": "stopped", "volume_count": volume_count}),
-    ))?;
-    Ok(())
-}
-
-fn collect_worker(
+pub(super) fn collect_worker(
     mut worker: Worker,
     stop: &Stop,
     poll: Duration,
@@ -357,6 +240,7 @@ mod tests {
         }
     }
 
+    use std::path::Path;
     #[test]
     fn disappearing_volume_preserves_cursor_and_reports_health_then_resume() {
         let checkpoint = Checkpoint {
@@ -368,7 +252,9 @@ mod tests {
             caught_up: true,
         };
         let mut worker = Worker {
-            policy: crate::filter::PathFilters::default().compile().unwrap(),
+            policy: usnjmon_core::filter::PathFilters::default()
+                .compile()
+                .unwrap(),
             lane: Lane::Live,
             config: VolumeConfig {
                 name: "fixture".into(),
@@ -385,7 +271,7 @@ mod tests {
         worker.source_failed(&error, &mut sink, 10_000).unwrap();
         assert_eq!(worker.checkpoint, Some(checkpoint.clone()));
         assert!(worker.retry_at > Instant::now());
-        assert_eq!(sink.0[0].id, engine::HEALTH);
+        assert_eq!(sink.0[0].id, event::HEALTH);
         let query = engine::Journal {
             id: 5,
             first_usn: 80,
@@ -409,37 +295,5 @@ mod tests {
         worker.source_failed(&error, &mut sink, 10_000).unwrap();
         assert!(worker.invalidated);
         assert_eq!(worker.checkpoint, Some(checkpoint));
-    }
-
-    #[test]
-    fn state_lock_excludes_second_collector() {
-        let path = std::env::current_dir()
-            .unwrap()
-            .join("target")
-            .join(format!("lock-test-{}", std::process::id()));
-        std::fs::create_dir(&path).unwrap();
-        let first = lock_state(&path).unwrap();
-        assert!(lock_state(&path).is_err());
-        drop(first);
-        drop(lock_state(&path).unwrap());
-        std::fs::remove_file(path.join("collector.lock")).unwrap();
-        std::fs::remove_dir(path).unwrap();
-    }
-
-    #[test]
-    fn worker_exit_or_panic_cancels_peer_lanes() {
-        for panic in [false, true] {
-            let stop = Stop::default();
-            let peer_stop = stop.clone();
-            let peer = std::thread::spawn(move || peer_stop.wait(Duration::from_secs(60)));
-            let worker_stop = stop.clone();
-            let worker = std::thread::spawn(move || {
-                let _cancel = StopOnExit(worker_stop);
-                assert!(!panic, "injected worker panic");
-            });
-            assert_eq!(worker.join().is_err(), panic);
-            assert!(peer.join().unwrap());
-            assert!(stop.requested());
-        }
     }
 }

@@ -1,28 +1,56 @@
 [package]
 name = "usnjmon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "USNJMon: convert USN journals to EVTX or monitor continuously"
+license.workspace = true
+publish.workspace = true
+
+[workspace]
+members = ["crates/usnjmon-core", "crates/usnjmon-evtx"]
+default-members = [".", "crates/usnjmon-core", "crates/usnjmon-evtx"]
+resolver = "3"
+
+[workspace.package]
 version = "0.5.1"
 edition = "2024"
 rust-version = "1.85"
-description = "USNJMon: convert USN journals to EVTX or monitor continuously"
 license = "MIT"
 publish = false
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 
-[lints.clippy]
+[workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
 must_use_candidate = "warn"
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+roxmltree = "0.21"
+windows-service = "0.8"
+windows-sys = "0.61"
+usnjmon-core = { path = "crates/usnjmon-core", version = "=0.5.1" }
+usnjmon-evtx = { path = "crates/usnjmon-evtx", version = "=0.5.1" }
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+usnjmon-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.8"
-windows-sys = { version = "0.61", features = [
+sha2.workspace = true
+usnjmon-evtx.workspace = true
+windows-service.workspace = true
+windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",
@@ -37,7 +65,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-roxmltree = "0.21"
+roxmltree.workspace = true
+usnjmon-core = { workspace = true, features = ["test-util"] }
 
 [profile.release]
 lto = true

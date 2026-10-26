@@ -1,6 +1,6 @@
 //! Native volume enumeration; these APIs have no equivalent in the standard library.
 
-use super::volume;
+use super::wide;
 use crate::config::{self, DiscoveredVolume, VolumeConfig, Volumes};
 use anyhow::{Context, Result, ensure};
 use std::collections::HashSet;
@@ -22,7 +22,7 @@ pub fn resolve_root(root: &str) -> Result<String> {
         // SAFETY: Path is NUL-terminated; the output buffer has the stated WCHAR capacity.
         unsafe {
             GetVolumeNameForVolumeMountPointW(
-                volume::wide(&normalized).as_ptr(),
+                wide(&normalized).as_ptr(),
                 buffer.as_mut_ptr(),
                 buffer.len() as u32,
             )
@@ -97,7 +97,7 @@ pub fn select(config: &Volumes) -> Result<Selection> {
         // SAFETY: The path and output buffer are live; unused optional outputs are NULL.
         let success = unsafe {
             GetVolumeInformationW(
-                volume::wide(&path).as_ptr(),
+                wide(&path).as_ptr(),
                 ptr::null_mut(),
                 0,
                 ptr::null_mut(),
@@ -121,7 +121,7 @@ pub fn select(config: &Volumes) -> Result<Selection> {
             // SAFETY: The path is terminated and mounts/used remain valid for this call.
             let success = unsafe {
                 GetVolumePathNamesForVolumeNameW(
-                    volume::wide(&path).as_ptr(),
+                    wide(&path).as_ptr(),
                     mounts.as_mut_ptr(),
                     mounts.len() as u32,
                     &mut used,
