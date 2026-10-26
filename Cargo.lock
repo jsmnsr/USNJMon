@@ -192,7 +192,7 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "usnjmon"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "roxmltree",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "usnjmon-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "roxmltree",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "usnjmon-evtx"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "sha2",

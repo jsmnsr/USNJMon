@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Cargo.toml version to publish (for example 0.5.1); existing tags cannot be reused'
+        description: 'Cargo.toml version to publish (for example 0.5.2); existing tags cannot be reused'
         required: true
         type: string
 

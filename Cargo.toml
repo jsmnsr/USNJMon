@@ -13,7 +13,7 @@ default-members = [".", "crates/usnjmon-core", "crates/usnjmon-evtx"]
 resolver = "3"
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -34,8 +34,8 @@ sha2 = "0.10"
 roxmltree = "0.21"
 windows-service = "0.8"
 windows-sys = "0.61"
-usnjmon-core = { path = "crates/usnjmon-core", version = "=0.5.1" }
-usnjmon-evtx = { path = "crates/usnjmon-evtx", version = "=0.5.1" }
+usnjmon-core = { path = "crates/usnjmon-core", version = "=0.5.2" }
+usnjmon-evtx = { path = "crates/usnjmon-evtx", version = "=0.5.2" }
 
 [lints]
 workspace = true
