@@ -1,8 +1,12 @@
 //! Windows native adapters. Unsafe API calls stay behind these safe interfaces.
 
-pub mod collector;
+mod collector;
 pub mod converter;
 mod discovery;
 pub mod event_log;
 pub mod service;
-pub mod volume;
+mod volume;
+
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(Some(0)).collect()
+}

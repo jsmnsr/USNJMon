@@ -60,6 +60,12 @@ source cleanliness, project license and CI run URL when built by Actions. The Cy
 SBOM includes the target's non-dev Cargo closure (including build/proc-macro
 dependencies) and Rust's standard library, not every Windows platform component.
 Rust's standard-library notice file covers its bundled third-party notices.
+First-party workspace packages appear as `pkg:generic` components with the same
+version and MIT license as the application, covered by the root `LICENSE` and
+the recorded source commit. Registry dependencies retain their `pkg:cargo`
+identities and individual notices. Packaging rejects unreviewed non-workspace
+path/git dependencies and workspace members outside `crates` or with a different
+version/license.
 
 Preview executables and scripts are **unsigned**. Checksums detect file changes;
 they are not Authenticode signatures or signed build attestations.
@@ -71,6 +77,8 @@ Dependencies retain their respective licenses; their notices are included in
 ## Maintainer release procedure
 
 1. Merge the desired changes and version update in `Cargo.toml`/`Cargo.lock`.
+   Update `workspace.package.version` and the exact versions of both internal
+   `workspace.dependencies` together; all three packages inherit that version.
 2. Confirm main's Windows CI passes. Review [live acceptance](validation.md)
    on a disposable authorized machine; CI does not install/start services.
 3. Run **Actions > Preview release > Run workflow**, select `main`, and enter

@@ -1,11 +1,11 @@
 //! SCM hosting and process-lifetime console cancellation, unavailable in std.
 
-use crate::stop::Stop;
 use anyhow::{Context, Result};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use usnjmon_core::stop::Stop;
 use windows_service::service::{
     ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType,
 };

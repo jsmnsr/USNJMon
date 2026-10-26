@@ -72,6 +72,18 @@ try {
     if (@($sbom.components | Where-Object { $_.name -eq 'roxmltree' }).Count -ne 0) {
         throw 'Dev-only dependency leaked into the release inventory.'
     }
+    foreach ($name in @('usnjmon-core', 'usnjmon-evtx')) {
+        $component = @($sbom.components | Where-Object { $_.name -eq $name })
+        if ($component.Count -ne 1 -or $component[0].version -ne $ExpectedVersion -or
+            $component[0].purl -ne "pkg:generic/$name@$ExpectedVersion" -or
+            $component[0].licenses[0].expression -ne 'MIT') {
+            throw "Workspace dependency missing version, provenance or MIT license: $name"
+        }
+        $applicationDeps = $sbom.dependencies | Where-Object { $_.ref -eq $sbom.metadata.component.'bom-ref' }
+        if ($component[0].'bom-ref' -notin $applicationDeps.dependsOn) {
+            throw "Workspace dependency missing from application graph: $name"
+        }
+    }
     $references = @($sbom.components | ForEach-Object { $_.'bom-ref' }) + @($sbom.metadata.component.'bom-ref')
     if (@($references | Select-Object -Unique).Count -ne $references.Count) { throw 'Duplicate SBOM component references.' }
     foreach ($dependency in $sbom.dependencies) {
