@@ -63,4 +63,4 @@ including XPath selection and named-field Unicode round trips. The tests never
 register providers, install/start services, read host journals or write live logs.
 
 See [validation](validation.md) for explicitly authorized deployment acceptance
-checks and [references](references.md) for native API/format decisions.
+checks.
